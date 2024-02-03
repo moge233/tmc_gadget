@@ -5,3 +5,17 @@
 .cproject
 .project
 .settings/
+
+.Module.symvers.cmd
+.f_tmc.ko.cmd
+.f_tmc.mod.cmd
+.f_tmc.mod.o.cmd
+.f_tmc.o.cmd
+.modules.order.cmd
+Module.symvers
+f_tmc.ko
+f_tmc.mod
+f_tmc.mod.c
+f_tmc.mod.o
+f_tmc.o
+modules.order
