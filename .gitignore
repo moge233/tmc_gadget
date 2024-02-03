@@ -1,0 +1,7 @@
+./obj/
+./kobj/
+./mod/
+
+.cproject
+.project
+.settings/
