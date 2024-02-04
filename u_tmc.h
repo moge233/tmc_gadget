@@ -144,6 +144,7 @@ struct tmc_device {
 	struct usb_ep *interrupt_ep;
 
 	bool rx_complete;
+	bool tx_pending;
 
 	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
 	wait_queue_head_t tx_wait;				/* Wait until there are write buffers available to use. */
