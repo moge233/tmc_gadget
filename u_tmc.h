@@ -17,16 +17,6 @@
 #include <linux/types.h>
 
 
-#define tmc_dbg(f, fmt, args...) \
-	dev_dbg(&(f)->config->cdev->gadget->dev, "%s: " fmt, (f)->name, ##args)
-#define tmc_info(f, fmt, args...) \
-	dev_info(&(f)->config->cdev->gadget->dev, "%s: " fmt, (f)->name, ##args)
-#define tmc_warn(f, fmt, args...) \
-	dev_warn(&(f)->config->cdev->gadget->dev, "%s: " fmt, (f)->name, ##args)
-#define tmc_err(f, fmt, args...) \
-	dev_err(&(f)->config->cdev->gadget->dev, "%s: " fmt, (f)->name, ##args)
-
-
 #define TMC_INTF						0
 #define TMC_NUM_ENDPOINTS				3
 #define TMC_488_SUBCLASS				3
