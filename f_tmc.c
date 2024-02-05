@@ -923,18 +923,36 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 				printk("bTag: %d\n", ctrl->wValue);
 
 				/* Dequeue bulk out endpoint and halt it */
+				if(usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req))
+				{
+					printk("could not dequeue bulk OUT endpoint\n");
+				}
+				if(usb_ep_set_halt(tmc->bulk_out_ep))
+				{
+					printk("could not halt bulk OUT endpoint\n");
+				}
 				break;
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
 				printk("INITIATE ABORT BULK OUT STATUS\n");
+				// TODO
 				break;
 			case USBTMC_REQUEST_INITIATE_ABORT_BULK_IN:
 				printk("INITIATE ABORT BULK IN\n");
 				printk("bTag: %d\n", ctrl->wValue);
 
-				/* TODO: Dequeue bulk in endpoint and halt it */
+				/* Dequeue bulk in endpoint and halt it */
+				if(usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_in_req))
+				{
+					printk("could not dequeue bulk IN endpoint\n");
+				}
+				if(usb_ep_set_halt(tmc->bulk_in_ep))
+				{
+					printk("could not halt bulk IN endpoint\n");
+				}
 				break;
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
 				printk("INITIATE ABORT BULK IN STATUS\n");
+				// TODO
 				break;
 			default:
 				printk("UHANDLED REQUEST");
