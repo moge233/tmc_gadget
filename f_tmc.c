@@ -40,11 +40,6 @@ static struct usb_endpoint_descriptor tmc_interrupt_ep = {
 };
 
 static struct usb_string tmc_en_us_strings[] = {
-	[STRING_DESC_INDEX_INTERFACE].s = "Interface",
-	[STRING_DESC_INDEX_CONFIG].s = "Config",
-	[STRING_DESC_INDEX_MFG].s = "Keithley Instruments",
-	[STRING_DESC_INDEX_PROD].s = "Transformer",
-	[STRING_DESC_INDEX_SERIAL_NO].s = "4206969",
 	{ }
 };
 
@@ -1001,7 +996,7 @@ static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 	tmc->dev.release = tmc_function_device_release;
 	tmc->dev.class = &tmc_class;
 	tmc->dev.devt = MKDEV(major, minor);
-	ret = dev_set_name(&tmc->dev, "tmc%d", minor);
+	ret = dev_set_name(&tmc->dev, "tmc");
 	if (ret)
 	{
 		printk("Unable to set device name\n");
