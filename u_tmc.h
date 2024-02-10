@@ -133,16 +133,15 @@ struct tmc_device {
 	struct usb_ep *bulk_out_ep;
 	struct usb_ep *interrupt_ep;
 
-	bool rx_complete;
-	bool tx_pending;
-
 	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
 	wait_queue_head_t tx_wait;				/* Wait until there are write buffers available to use. */
 
+	struct list_head rx_reqs;				/* List of free RX structs */
+	struct list_head rx_reqs_active;		/* List of Active RX xfers */
+	struct list_head rx_buffers;			/* List of completed xfers */
+
 	struct list_head tx_reqs;				/* List of free TX structs */
 	struct list_head tx_reqs_active;		/* List of Active TX xfers */
-
-	size_t current_rx_bytes;
 
 	struct usb_function func;
 	bool func_connected;
@@ -157,13 +156,11 @@ struct tmc_device {
 	struct interrupt_response interrupt;
 
 	struct tmc_header header;
-	struct usb_request *bulk_in_req;
-	struct usb_request *bulk_out_req;
-	struct usb_request *interrupt_req;
+	struct usb_request *current_rx_req;
+	size_t current_rx_bytes;
+	u8 *current_rx_buf;
 
-	bool bulk_write_pending;
-	bool bulk_read_complete;
-	bool intr_write_pending;
+	struct usb_request *interrupt_req;
 
 	struct device dev;
 	struct cdev	cdev;
