@@ -112,6 +112,7 @@ static inline struct usb_endpoint_descriptor *ep_desc(struct usb_gadget *gadget,
 	}
 }
 
+#ifdef RLSM
 static void remote_local_state_machine(struct tmc_device *tmc, int event)
 {
 	switch(tmc->remote_local_state)
@@ -223,6 +224,7 @@ static void remote_local_state_machine(struct tmc_device *tmc, int event)
 			break;
 	}
 }
+#endif
 
 static void tmc_function_req_complete(struct usb_ep *ep, struct usb_request *req)
 {
@@ -638,7 +640,7 @@ static const struct file_operations f_tmc_fops = {
 
 static void tmc_function_device_release(struct device *dev)
 {
-	// TODO: tmc_function_device_release
+	// TODO: tmc_function_device_release. What needs to be done in here?
 	return;
 }
 
@@ -682,6 +684,7 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	ep = usb_ep_autoconfig(c->cdev->gadget, &tmc_bulk_in_ep_fs);
 	if (!ep) {
 		printk("Unable to allocate bulk in EP\n");
+		return ret;
 	}
 	else
 	{
@@ -691,6 +694,7 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	ep = usb_ep_autoconfig(c->cdev->gadget, &tmc_bulk_out_ep_fs);
 	if (!ep) {
 		printk("Unable to allocate bulk out EP\n");
+		return ret;
 	}
 	else
 	{
@@ -700,12 +704,14 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	ep = usb_ep_autoconfig(c->cdev->gadget, &tmc_interrupt_ep_fs);
 	if (!ep) {
 		printk("Unable to allocate interrupt EP\n");
+		return ret;
 	}
 	else
 	{
 		tmc->interrupt_ep = ep;
 	}
 
+	/* All endpoints are dual speed */
 	tmc_bulk_in_ep_hs.bEndpointAddress = tmc_bulk_in_ep_fs.bEndpointAddress;
 	tmc_bulk_out_ep_hs.bEndpointAddress = tmc_bulk_out_ep_fs.bEndpointAddress;
 	tmc_interrupt_ep_hs.bEndpointAddress = tmc_interrupt_ep_fs.bEndpointAddress;
@@ -719,13 +725,17 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	}
 
 	ret = -ENOMEM;
-	for (int i = 0; i < 16; i++) {
+	for (int i = 0; i < 32; i++) {
 		req = tmc_req_alloc(tmc->bulk_in_ep, TMC_BULK_ENDPOINT_SIZE, GFP_KERNEL);
+		if(!req)
+			goto error_bulk_in_reqs;
 		list_add(&req->list, &tmc->tx_reqs);
 	}
 
-	for (int i = 0; i < 16; i++) {
+	for (int i = 0; i < 32; i++) {
 		req = tmc_req_alloc(tmc->bulk_out_ep, TMC_BULK_ENDPOINT_SIZE, GFP_KERNEL);
+		if(!req)
+			goto error_bulk_out_reqs;
 		list_add(&req->list, &tmc->rx_reqs);
 	}
 
@@ -733,7 +743,8 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	tmc->interrupt_req = tmc_req_alloc(tmc->interrupt_ep, TMC_INTR_ENDPOINT_SIZE, GFP_KERNEL);
 	if(!tmc->interrupt_req)
 	{
-		printk("Failed to allocated interrupt req\n");
+		printk("Failed to allocate interrupt req\n");
+		goto error_interrupt_req;
 	}
 
 	/* Create the char device */
@@ -742,9 +753,33 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	if(ret)
 	{
 		printk("Unable to create character device\n");
+		goto error_cdev;
 	}
 
 	return 0;
+
+error_cdev:
+	cdev_del(&tmc->cdev);
+
+error_interrupt_req:
+	tmc_req_free(tmc->interrupt_ep, tmc->interrupt_req);
+
+error_bulk_out_reqs:
+	while (!list_empty(&tmc->rx_reqs)) {
+		req = container_of(tmc->rx_reqs.next, struct usb_request, list);
+		list_del(&req->list);
+		tmc_req_free(tmc->bulk_out_ep, req);
+	}
+
+error_bulk_in_reqs:
+	while (!list_empty(&tmc->tx_reqs)) {
+		req = container_of(tmc->tx_reqs.next, struct usb_request, list);
+		list_del(&req->list);
+		tmc_req_free(tmc->bulk_in_ep, req);
+	}
+
+	usb_free_all_descriptors(f);
+	return ret;
 }
 
 static void tmc_function_unbind(struct usb_configuration *c, struct usb_function *f)
@@ -787,11 +822,6 @@ static void tmc_function_unbind(struct usb_configuration *c, struct usb_function
 	usb_free_all_descriptors(f);
 }
 
-static int tmc_function_get_alt(struct usb_function *f, unsigned interface)
-{
-	// TODO
-	return 0;
-}
 static int set_tmc_interface(struct tmc_device *tmc)
 {
 	int			result = 0;
@@ -897,18 +927,9 @@ static int tmc_function_set_alt(struct usb_function *f, unsigned interface, unsi
 
 static void tmc_function_disable(struct usb_function *f)
 {
-	// TODO
-	printk("%s\n", __FUNCTION__);
-}
+	struct tmc_device *tmc = func_to_tmc(f);
 
-void tmc_function_connect(struct tmc_device *tmc)
-{
-	printk("%s\n", __FUNCTION__);
-}
-
-void tmc_function_disconnect(struct tmc_device *tmc)
-{
-	printk("%s\n", __FUNCTION__);
+	tmc_reset_interface(tmc);
 }
 
 static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
@@ -1121,7 +1142,6 @@ static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 	tmc->func.strings = tmc_function_strings;
 	tmc->func.bind = tmc_function_bind;
 	tmc->func.unbind = tmc_function_unbind;
-	tmc->func.get_alt = tmc_function_get_alt;
 	tmc->func.set_alt = tmc_function_set_alt;
 	tmc->func.disable = tmc_function_disable;
 	tmc->func.setup = tmc_function_setup;
