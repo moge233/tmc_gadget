@@ -17,6 +17,8 @@
 #include <linux/types.h>
 
 
+#define NUM_BULK_REQUESTS				1
+
 #define TMC_INTF						0
 #define TMC_NUM_ENDPOINTS				3
 #define TMC_488_SUBCLASS				3
@@ -122,6 +124,7 @@ struct tmc_header {
 	u8 TermChar;
 	u8 reserved2[2];
 };
+#define TMC_HEADER_SIZE sizeof(struct tmc_header)
 
 struct tmc_device {
 	spinlock_t lock;						/* Lock this structure */
@@ -156,6 +159,8 @@ struct tmc_device {
 	struct interrupt_response interrupt;
 
 	struct tmc_header header;
+	bool header_required;
+	size_t current_msg_bytes;
 	struct usb_request *current_rx_req;
 	size_t current_rx_bytes;
 	u8 *current_rx_buf;
