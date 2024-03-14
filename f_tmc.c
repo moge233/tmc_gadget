@@ -693,8 +693,16 @@ long tmc_function_fops_ioctl(struct file *file, unsigned int cmd, unsigned long 
 	struct tmc_device *tmc  = file->private_data;
 	unsigned long flags = 0;
 	spin_lock_irqsave(&tmc->lock, flags);
+	printk("tmc_function_fops_ioctl(): cmd: %d\n", cmd);
 	switch(cmd)
 	{
+	case USBTMC_IOCTL_ABORT_BULK_OUT:
+	{
+		struct usb_request *current_rx_req;
+		current_rx_req = container_of(tmc->rx_reqs_active.next, struct usb_request, list);
+		usb_ep_dequeue(tmc->bulk_out_ep, current_rx_req);
+		break;
+	}
 	default:
 		break;
 	}
@@ -997,6 +1005,8 @@ static int tmc_function_set_alt(struct usb_function *f, unsigned interface, unsi
 
 static void tmc_function_disable(struct usb_function *f)
 {
+	printk("tmc_function_disable() called\n");
+
 	struct tmc_device *tmc = func_to_tmc(f);
 
 	tmc_reset_interface(tmc);
@@ -1116,21 +1126,49 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 		switch(ctrl->bRequest) {
 			// TODO
 			case USBTMC_REQUEST_INITIATE_ABORT_BULK_OUT:
+			{
 				printk("INITIATE ABORT BULK OUT\n");
 				printk("bTag: %d\n", ctrl->wValue);
+				tmc->header_required = true;
+				tmc->current_rx_bytes = 0;
+				tmc->current_msg_bytes = 0;
+
+				usb_ep_set_halt(tmc->bulk_out_ep);
+
+				u8 response[] = {USBTMC_STATUS_SUCCESS, ctrl->wValue & 0xFF};
+				value = sizeof(response);
+				memcpy(req->buf, (void *) &response[0], value);
 				break;
+			}
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
-				printk("INITIATE ABORT BULK OUT STATUS\n");
-				printk("bTag: %d\n", ctrl->wValue);
+			{
+				printk("CHECK ABORT BULK OUT STATUS\n");
+				u8 response[] = {USBTMC_STATUS_SUCCESS, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+				value = sizeof(response);
+				memcpy(req->buf, (void *) &response[0], value);
 				break;
+			}
 			case USBTMC_REQUEST_INITIATE_ABORT_BULK_IN:
+			{
 				printk("INITIATE ABORT BULK IN\n");
 				printk("bTag: %d\n", ctrl->wValue);
+
+				struct usb_request *current_tx_req = container_of(tmc->tx_reqs_active.next, struct usb_request, list);
+				usb_ep_dequeue(tmc->bulk_in_ep, current_tx_req);
+
+				u8 response[] = {USBTMC_STATUS_PENDING, ctrl->wValue & 0xFF};
+				value = sizeof(response);
+				memcpy(req->buf, (void *) &response[0], value);
 				break;
+			}
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
-				printk("INITIATE ABORT BULK IN STATUS\n");
-				printk("bTag: %d\n", ctrl->wValue);
+			{
+				printk("CHECK ABORT BULK IN STATUS\n");
+				u8 response[] = {USBTMC_STATUS_SUCCESS, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+				value = sizeof(response);
+				memcpy(req->buf, (void *) &response[0], value);
 				break;
+			}
 			default:
 				printk("UHANDLED REQUEST");
 				printk("wValue: %d, wIndex: %d, wLength: %d\n", w_value, w_index, w_length);

@@ -12,6 +12,7 @@
 
 #include <linux/usb/composite.h>
 #include <linux/usb/gadget.h>
+#include <linux/usb/tmc.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/types.h>
