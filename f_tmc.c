@@ -693,9 +693,14 @@ long tmc_function_fops_ioctl(struct file *file, unsigned int cmd, unsigned long 
 	struct tmc_device *tmc  = file->private_data;
 	unsigned long flags = 0;
 	spin_lock_irqsave(&tmc->lock, flags);
-	printk("tmc_function_fops_ioctl(): cmd: %d\n", cmd);
 	switch(cmd)
 	{
+	case USBTMC_IOCTL_INDICATOR_PULSE:
+		// TODO
+		break;
+	case USBTMC_IOCTL_CLEAR:
+		// TODO
+		break;
 	case USBTMC_IOCTL_ABORT_BULK_OUT:
 	{
 		struct usb_request *current_rx_req;
@@ -703,6 +708,81 @@ long tmc_function_fops_ioctl(struct file *file, unsigned int cmd, unsigned long 
 		usb_ep_dequeue(tmc->bulk_out_ep, current_rx_req);
 		break;
 	}
+	case USBTMC_IOCTL_ABORT_BULK_IN:
+		// TODO
+		break;
+	case USBTMC_IOCTL_CLEAR_OUT_HALT:
+		// TODO
+		break;
+	case USBTMC_IOCTL_CLEAR_IN_HALT:
+		// TODO
+		break;
+	case USBTMC_IOCTL_CTRL_REQUEST:
+		// TODO
+		break;
+	case USBTMC_IOCTL_GET_TIMEOUT:
+		// TODO
+		break;
+	case USBTMC_IOCTL_SET_TIMEOUT:
+		// TODO
+		break;
+	case USBTMC_IOCTL_EOM_ENABLE:
+		// TODO
+		break;
+	case USBTMC_IOCTL_CONFIG_TERMCHAR:
+		// TODO
+		break;
+	case USBTMC_IOCTL_WRITE:
+		// TODO
+		break;
+	case USBTMC_IOCTL_READ:
+		// TODO
+		break;
+	case USBTMC_IOCTL_WRITE_RESULT:
+		// TODO
+		break;
+	case USBTMC_IOCTL_API_VERSION:
+		// TODO
+		break;
+	case USBTMC488_IOCTL_GET_CAPS:
+		// TODO
+		break;
+	case USBTMC488_IOCTL_READ_STB:
+		// TODO
+		break;
+	case USBTMC488_IOCTL_REN_CONTROL:
+		// TODO
+		break;
+	case USBTMC488_IOCTL_GOTO_LOCAL:
+		// TODO
+		break;
+	case USBTMC488_IOCTL_LOCAL_LOCKOUT:
+		// TODO
+		break;
+	case USBTMC488_IOCTL_TRIGGER:
+		// TODO
+		break;
+	case USBTMC488_IOCTL_WAIT_SRQ:
+		// TODO
+		break;
+	case USBTMC_IOCTL_MSG_IN_ATTR:
+		// TODO
+		break;
+	case USBTMC_IOCTL_AUTO_ABORT:
+		// TODO
+		break;
+	case USBTMC_IOCTL_GET_STB:
+		// TODO
+		break;
+	case USBTMC_IOCTL_GET_SRQ_STB:
+		// TODO
+		break;
+	case USBTMC_IOCTL_CANCEL_IO:
+		// TODO
+		break;
+	case USBTMC_IOCTL_CLEANUP_IO:
+		// TODO
+		break;
 	default:
 		break;
 	}
@@ -1025,7 +1105,6 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 	if(ctrl->bRequestType == (USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_IN)) {
 		switch (ctrl->bRequest) {
 			case USBTMC_REQUEST_INITIATE_CLEAR:
-				// TODO: Need to stall the bulk out endpoint here
 				value = usb_ep_set_halt(tmc->bulk_out_ep);
 				if(value < 0) {
 					printk("STALL on bulk out endpoint failed\n");
@@ -1127,8 +1206,6 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 			// TODO
 			case USBTMC_REQUEST_INITIATE_ABORT_BULK_OUT:
 			{
-				printk("INITIATE ABORT BULK OUT\n");
-				printk("bTag: %d\n", ctrl->wValue);
 				tmc->header_required = true;
 				tmc->current_rx_bytes = 0;
 				tmc->current_msg_bytes = 0;
@@ -1142,7 +1219,6 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 			}
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
 			{
-				printk("CHECK ABORT BULK OUT STATUS\n");
 				u8 response[] = {USBTMC_STATUS_SUCCESS, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 				value = sizeof(response);
 				memcpy(req->buf, (void *) &response[0], value);
@@ -1150,9 +1226,6 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 			}
 			case USBTMC_REQUEST_INITIATE_ABORT_BULK_IN:
 			{
-				printk("INITIATE ABORT BULK IN\n");
-				printk("bTag: %d\n", ctrl->wValue);
-
 				struct usb_request *current_tx_req = container_of(tmc->tx_reqs_active.next, struct usb_request, list);
 				usb_ep_dequeue(tmc->bulk_in_ep, current_tx_req);
 
@@ -1163,7 +1236,6 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 			}
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
 			{
-				printk("CHECK ABORT BULK IN STATUS\n");
 				u8 response[] = {USBTMC_STATUS_SUCCESS, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 				value = sizeof(response);
 				memcpy(req->buf, (void *) &response[0], value);
