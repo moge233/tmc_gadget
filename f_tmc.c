@@ -66,6 +66,7 @@ static struct usb_descriptor_header *tmc_descriptors_fs[] = {
 		(struct usb_descriptor_header *) &tmc_bulk_in_ep_fs,
 		(struct usb_descriptor_header *) &tmc_bulk_out_ep_fs,
 		(struct usb_descriptor_header *) &tmc_interrupt_ep_fs,
+		NULL
 };
 
 static struct usb_endpoint_descriptor tmc_bulk_in_ep_hs = {
@@ -95,6 +96,7 @@ static struct usb_descriptor_header *tmc_descriptors_hs[] = {
 		(struct usb_descriptor_header *) &tmc_bulk_in_ep_hs,
 		(struct usb_descriptor_header *) &tmc_bulk_out_ep_hs,
 		(struct usb_descriptor_header *) &tmc_interrupt_ep_hs,
+		NULL
 };
 
 static inline struct usb_endpoint_descriptor *ep_desc(struct usb_gadget *gadget,
