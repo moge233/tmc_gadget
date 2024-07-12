@@ -5,6 +5,7 @@
  *      Author: matt
  */
 
+#include <linux/errno.h>
 #include <linux/configfs.h>
 #include <linux/poll.h>
 #include <uapi/linux/usb/tmc.h>
@@ -124,7 +125,7 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 {
 
 #ifdef __DEBUG__
-	printk("tmc_function_bulk_out_req_complete()");
+	printk("tmc_function_bulk_out_req_complete()\n");
 #endif
 
 	struct tmc_device *tmc = (struct tmc_device *)ep->driver_data;
@@ -180,8 +181,8 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 									: 0;
 #ifdef __DEBUG__
 					printk("tmc_function_bulk_out_req_complete(): tmc->current_msg_bytes: %lu\n", tmc->current_msg_bytes);
-					printk("tmc->header.MsgID = %u", tmc->header.MsgID);
-					printk("tmc->header.TransferSize = %u", tmc->header.TransferSize);
+					printk("tmc->header.MsgID = %u\n", tmc->header.MsgID);
+					printk("tmc->header.TransferSize = %u\n", tmc->header.TransferSize);
 #endif
 				}
 				list_add_tail(&req->list, &tmc->rx_buffers);
@@ -192,6 +193,9 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 			break;
 		case -ECONNRESET:
 		case -ESHUTDOWN:
+#ifdef __DEBUG__
+			printk("%s: -ESHUTDOWN\n", __func__);
+#endif
 			list_add(&req->list, &tmc->rx_reqs);
 			break;
 		case -ECONNABORTED:
@@ -222,6 +226,7 @@ static void tmc_function_bulk_in_complete(struct usb_ep *ep, struct usb_request 
 		fallthrough;
 	case -ECONNRESET:		/* unlink */
 	case -ESHUTDOWN:		/* disconnect etc */
+		printk("%s: SHUTDOWN\n", __func__);
 		break;
 	}
 
@@ -263,13 +268,16 @@ static struct usb_request *tmc_req_alloc(struct usb_ep *ep, unsigned len, gfp_t 
 	return req;
 }
 
-static void tmc_setup_bulk_out_reqs(struct tmc_device *tmc)
+static int tmc_setup_bulk_out_reqs(struct tmc_device *tmc)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct usb_request *req;
+	int error = 0;
 
 	while(likely(!list_empty(&tmc->rx_reqs)))
 	{
-		int error;
 
 		req = container_of(tmc->rx_reqs.next, struct usb_request, list);
 		list_del_init(&req->list);
@@ -285,6 +293,11 @@ static void tmc_setup_bulk_out_reqs(struct tmc_device *tmc)
 
 		/* here, we unlock, and only unlock, to avoid deadlock. */
 		spin_unlock(&tmc->lock);
+#ifdef __DEBUG__
+		printk("tmc->bulk_out_ep->address: %d\n", tmc->bulk_out_ep->address);
+		printk("tmc->bulk_out_ep->name: %s\n", tmc->bulk_out_ep->name);
+		printk("tmc->bulk_out_ep->enabled: %d\n", tmc->bulk_out_ep->enabled);
+#endif
 		error = usb_ep_queue(tmc->bulk_out_ep, req, GFP_ATOMIC);
 		spin_lock(&tmc->lock);
 		if (error) {
@@ -297,21 +310,30 @@ static void tmc_setup_bulk_out_reqs(struct tmc_device *tmc)
 		}
 	}
 
-	return;
+	return error;
 }
 
 static int tmc_function_fops_open(struct inode *inode, struct file *file)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc;
 
 	tmc = container_of(inode->i_cdev, struct tmc_device, cdev);
-	file->private_data = tmc;
+	if(tmc->state == TMC_STATE_CONNECTED) {
+		file->private_data = tmc;
+		return 0;
+	}
 
-	return 0;
+	return -EHOSTDOWN;
 }
 
 static int tmc_function_fops_release(struct inode *inode, struct file *file)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	file->private_data = NULL;
 
 	return 0;
@@ -319,6 +341,9 @@ static int tmc_function_fops_release(struct inode *inode, struct file *file)
 
 static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf, size_t len, loff_t *offset)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc = file->private_data;
 	unsigned long flags;
 	size_t size;
@@ -414,6 +439,9 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 
 static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size_t len, loff_t *offset)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc  = file->private_data;
 	size_t bytes_copied;
 	size_t current_rx_bytes;
@@ -430,7 +458,10 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 	mutex_lock(&tmc->lock_tmc_io);
 	spin_lock_irqsave(&tmc->lock, flags);
 
-	tmc_setup_bulk_out_reqs(tmc);
+	int err = tmc_setup_bulk_out_reqs(tmc);
+	if(err) {
+		return (ssize_t) err;
+	}
 
 	bytes_copied = 0;
 	current_rx_req = tmc->current_rx_req;
@@ -549,6 +580,9 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 
 static __poll_t tmc_function_fops_poll(struct file *file, struct poll_table_struct *wait)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	// TODO: f_tmc_poll
 	unsigned long flags = 0;
 	struct tmc_device *tmc  = file->private_data;
@@ -578,6 +612,9 @@ static __poll_t tmc_function_fops_poll(struct file *file, struct poll_table_stru
 
 long tmc_function_fops_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc  = file->private_data;
 	unsigned long flags = 0;
 	spin_lock_irqsave(&tmc->lock, flags);
@@ -701,6 +738,9 @@ static const struct class tmc_class = {
 
 static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct f_tmc_opts *opts;
 	struct usb_ep *ep;
 	struct tmc_device *tmc = func_to_tmc(f);
@@ -738,6 +778,9 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	}
 	else {
 		tmc->bulk_in_ep = ep;
+#ifdef __DEBUG__
+		printk("tmc->bulk_in_ep->enabled: %d\n", tmc->bulk_in_ep->enabled);
+#endif
 	}
 
 	ep = usb_ep_autoconfig(c->cdev->gadget, &tmc_bulk_out_ep_fs);
@@ -747,6 +790,9 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	}
 	else {
 		tmc->bulk_out_ep = ep;
+#ifdef __DEBUG__
+		printk("tmc->bulk_out_ep->enabled: %d\n", tmc->bulk_out_ep->enabled);
+#endif
 	}
 
 	ep = usb_ep_autoconfig(c->cdev->gadget, &tmc_interrupt_ep_fs);
@@ -756,12 +802,21 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	}
 	else {
 		tmc->interrupt_ep = ep;
+#ifdef __DEBUG__
+		printk("tmc->interrupt_ep->enabled: %d\n", tmc->interrupt_ep->enabled);
+#endif
 	}
 
 	/* All endpoints are dual speed */
 	tmc_bulk_in_ep_hs.bEndpointAddress = tmc_bulk_in_ep_fs.bEndpointAddress;
 	tmc_bulk_out_ep_hs.bEndpointAddress = tmc_bulk_out_ep_fs.bEndpointAddress;
 	tmc_interrupt_ep_hs.bEndpointAddress = tmc_interrupt_ep_fs.bEndpointAddress;
+
+#ifdef __DEBUG__
+	printk("tmc_bulk_in_ep_hs.bEndpointAddress: %d\n", tmc_bulk_in_ep_hs.bEndpointAddress);
+	printk("tmc_bulk_out_ep_hs.bEndpointAddress: %d\n", tmc_bulk_out_ep_hs.bEndpointAddress);
+	printk("tmc_interrupt_ep_hs.bEndpointAddress: %d\n", tmc_interrupt_ep_hs.bEndpointAddress);
+#endif
 
 	/* Copy descriptors */
 	ret = usb_assign_descriptors(f, tmc_descriptors_fs, tmc_descriptors_hs, NULL, NULL);
@@ -780,8 +835,10 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 
 	for (int i = 0; i < NUM_BULK_REQUESTS; i++) {
 		req = tmc_req_alloc(tmc->bulk_out_ep, TMC_BULK_ENDPOINT_SIZE, GFP_KERNEL);
-		if(!req)
+		if(!req) {
+			printk("Unable to allocate bulk_out_ep request\n");
 			goto error_bulk_out_reqs;
+		}
 		list_add(&req->list, &tmc->rx_reqs);
 	}
 
@@ -802,6 +859,8 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 		printk("Unable to create character device\n");
 		goto error_cdev;
 	}
+
+	opts->tmc = tmc;
 
 	return 0;
 
@@ -831,6 +890,9 @@ error_bulk_in_reqs:
 
 static void tmc_function_unbind(struct usb_configuration *c, struct usb_function *f)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc = func_to_tmc(f);
 	struct usb_request *req;
 
@@ -870,20 +932,23 @@ static void tmc_function_unbind(struct usb_configuration *c, struct usb_function
 
 static int set_tmc_interface(struct tmc_device *tmc)
 {
-	int			result = 0;
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
+	int result = 0;
 
-	tmc->bulk_in_ep->desc = ep_desc(tmc->gadget, &tmc_bulk_in_ep_fs, &tmc_bulk_in_ep_hs,
-				NULL);
+	tmc->bulk_in_ep->desc = ep_desc(tmc->gadget, &tmc_bulk_in_ep_fs, &tmc_bulk_in_ep_hs, NULL);
 	tmc->bulk_in_ep->driver_data = tmc;
 
-	tmc->bulk_out_ep->desc = ep_desc(tmc->gadget, &tmc_bulk_out_ep_fs,
-				    &tmc_bulk_out_ep_hs, NULL);
+	tmc->bulk_out_ep->desc = ep_desc(tmc->gadget, &tmc_bulk_out_ep_fs, &tmc_bulk_out_ep_hs, NULL);
 	tmc->bulk_out_ep->driver_data = tmc;
 
-	tmc->interrupt_ep->desc = ep_desc(tmc->gadget, &tmc_interrupt_ep_fs,
-				    &tmc_interrupt_ep_hs, NULL);
+	tmc->interrupt_ep->desc = ep_desc(tmc->gadget, &tmc_interrupt_ep_fs, &tmc_interrupt_ep_hs, NULL);
 	tmc->interrupt_ep->driver_data = tmc;
 
+#ifdef __DEBUG__
+	printk("Calling \"usb_ep_enable\" #1\n");
+#endif
 	result = usb_ep_enable(tmc->bulk_in_ep);
 	if (result != 0) {
 		printk("failed to enable bulk IN endpoint\n");
@@ -891,6 +956,9 @@ static int set_tmc_interface(struct tmc_device *tmc)
 		goto done;
 	}
 
+#ifdef __DEBUG__
+	printk("Calling \"usb_ep_enable\" #2\n");
+#endif
 	result = usb_ep_enable(tmc->bulk_out_ep);
 	if (result != 0) {
 		printk("failed to enable bulk OUT endpoint\n");
@@ -898,6 +966,9 @@ static int set_tmc_interface(struct tmc_device *tmc)
 		goto done;
 	}
 
+#ifdef __DEBUG__
+	printk("Calling \"usb_ep_enable\" #3\n");
+#endif
 	result = usb_ep_enable(tmc->interrupt_ep);
 	if (result != 0) {
 		printk("failed to enable interrupt IN endpoint\n");
@@ -915,6 +986,9 @@ done:
 		tmc->bulk_out_ep->desc = NULL;
 		tmc->interrupt_ep->desc = NULL;
 	}
+	else {
+		tmc->state = TMC_STATE_CONNECTED;
+	}
 
 	/* caller is responsible for cleanup on error */
 	return result;
@@ -922,6 +996,9 @@ done:
 
 void tmc_reset_interface(struct tmc_device *tmc)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	unsigned long	flags;
 
 	if (tmc->interface < 0)
@@ -941,11 +1018,15 @@ void tmc_reset_interface(struct tmc_device *tmc)
 	tmc->bulk_out_ep->desc = NULL;
 	tmc->interrupt_ep->desc = NULL;
 	tmc->interface = -1;
+	tmc->state = TMC_STATE_DISCONNECTED;
 	spin_unlock_irqrestore(&tmc->lock, flags);
 }
 
 static int set_interface(struct tmc_device *tmc, unsigned number)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	int			result = 0;
 
 	/* Free the current interface */
@@ -962,6 +1043,10 @@ static int set_interface(struct tmc_device *tmc, unsigned number)
 
 static int tmc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+	printk("\talt: %d\n", alt);
+#endif
 	struct tmc_device *tmc = func_to_tmc(f);
 	int ret = -ENOTSUPP;
 
@@ -973,7 +1058,10 @@ static int tmc_function_set_alt(struct usb_function *f, unsigned interface, unsi
 
 static void tmc_function_disable(struct usb_function *f)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
 	printk("tmc_function_disable() called\n");
+#endif
 
 	struct tmc_device *tmc = func_to_tmc(f);
 
@@ -982,6 +1070,9 @@ static void tmc_function_disable(struct usb_function *f)
 
 static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc = func_to_tmc(f);
 	struct usb_composite_dev *cdev = f->config->cdev;
 	struct usb_request	*req = cdev->req;
@@ -1146,19 +1237,45 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 	return value;
 }
 
+static void tmc_function_suspend(struct usb_function *f)
+{
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
+	return;
+}
+
+static void tmc_function_resume(struct usb_function *f)
+{
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
+	return;
+}
+
+
 static bool tmc_req_match(struct usb_function *f, const struct usb_ctrlrequest *ctrl, bool config0)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	return true;
 }
 
 static void tmc_free_func(struct usb_function *f)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc = func_to_tmc(f);
 	kfree(tmc);
 }
 
 static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 {
+#ifdef __DEBUG__
+	printk("%s\n", __func__);
+#endif
 	struct tmc_device *tmc;
 	int ret = -1;
 
@@ -1185,7 +1302,7 @@ static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 	tmc->status_byte = 2;	// TODO: Where would the status byte eventually come from? Maybe a configfs entry?
 
 	/* TODO: Add this to the sysfs */
-	tmc->state = TMC_STATE_DISCONNECTED;
+	tmc->state = TMC_STATE_CONNECTED;
 
 	/* Register the function. */
 	tmc->func.name = "tmc";
@@ -1195,6 +1312,8 @@ static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 	tmc->func.set_alt = tmc_function_set_alt;
 	tmc->func.disable = tmc_function_disable;
 	tmc->func.setup = tmc_function_setup;
+	tmc->func.suspend = tmc_function_suspend;
+	tmc->func.resume = tmc_function_resume;
 	tmc->func.free_func = tmc_free_func;
 	tmc->func.req_match = tmc_req_match;
 
@@ -1465,6 +1584,13 @@ static ssize_t f_tmc_ren_store(struct config_item *item, const char *page, size_
 
 CONFIGFS_ATTR(f_tmc_, ren);
 
+static ssize_t f_tmc_state_show(struct config_item *item, char *page)
+{
+	return sprintf(page, "%u\n", to_f_tmc_opts(item)->tmc->state);
+}
+
+CONFIGFS_ATTR_RO(f_tmc_, state);
+
 static ssize_t f_tmc_interface_show(struct config_item *item, char *page)
 {
 	return sprintf(page, "%u\n", to_f_tmc_opts(item)->interface);
@@ -1481,6 +1607,7 @@ static struct configfs_attribute *tmc_attrs[] = {
 	&f_tmc_attr_bmInterfaceCapabilities488,
 	&f_tmc_attr_bmDeviceCapabilities488,
 	&f_tmc_attr_ren,
+	&f_tmc_attr_state,
 	NULL,
 };
 

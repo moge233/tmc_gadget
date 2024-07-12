@@ -17,6 +17,7 @@
 #include <linux/device.h>
 #include <linux/types.h>
 
+//#define __DEBUG__
 
 #define NUM_BULK_REQUESTS				1
 
@@ -50,24 +51,6 @@ enum tmc_remote_local_state {
 enum tmc_transfer_attributes {
 	TMC_XFER_END_OF_MSG = 1,
 	TMC_XFER_TERM_CHAR_ENABLED = 2,
-};
-
-struct f_tmc_opts {
-	struct usb_function_instance			func_inst;
-	unsigned int							interface;
-	struct mutex 							lock;
-
-	/* TMC Capabilities */
-	/* Section 4.2.1.8 of USB TMC Specification Revision 1.0*/
-	u16 bcdUSBTMC;
-	u8 bmInterfaceCapabilities;
-	u8 bmDeviceCapabilities;
-
-	/* 488 Capabilities */
-	/* Section 4.2.2 of USB TMC/USB 488 Subclass Specification Revision 1.0 */
-	u16 bcdUSB488;
-	u8 bmInterfaceCapabilities488;
-	u8 bmDeviceCapabilities488;
 };
 
 struct capability_response {
@@ -147,6 +130,25 @@ struct tmc_device {
 
 	struct device dev;
 	struct cdev	cdev;
+};
+
+struct f_tmc_opts {
+	struct usb_function_instance			func_inst;
+	unsigned int							interface;
+	struct mutex 							lock;
+	struct tmc_device						*tmc;
+
+	/* TMC Capabilities */
+	/* Section 4.2.1.8 of USB TMC Specification Revision 1.0*/
+	u16 bcdUSBTMC;
+	u8 bmInterfaceCapabilities;
+	u8 bmDeviceCapabilities;
+
+	/* 488 Capabilities */
+	/* Section 4.2.2 of USB TMC/USB 488 Subclass Specification Revision 1.0 */
+	u16 bcdUSB488;
+	u8 bmInterfaceCapabilities488;
+	u8 bmDeviceCapabilities488;
 };
 
 #define fi_to_f_tmc_opts(f)	container_of(f, struct f_tmc_opts, func_inst)
