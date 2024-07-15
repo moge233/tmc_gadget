@@ -171,7 +171,13 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 						break;
 					}
 
-					tmc->current_msg_bytes = TMC_HEADER_SIZE + tmc->header.TransferSize;
+					if((tmc->header.MsgID == TMC_REQUEST_DEV_DEP_MSG_IN) ||
+							(tmc->header.MsgID == TMC_REQUEST_VENDOR_SPECIFIC_IN)) {
+						tmc->current_msg_bytes = TMC_HEADER_SIZE;
+					}
+					else {
+						tmc->current_msg_bytes = TMC_HEADER_SIZE + tmc->header.TransferSize;
+					}
 					/*
 					 * The total number of bytes sent must be a multiple of 4 so check
 					 * for alignment bytes here

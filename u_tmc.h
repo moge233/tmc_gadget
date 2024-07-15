@@ -17,7 +17,7 @@
 #include <linux/device.h>
 #include <linux/types.h>
 
-//#define __DEBUG__
+#define __DEBUG__
 
 #define NUM_BULK_REQUESTS				1
 
@@ -90,35 +90,40 @@ struct tmc_header {
 #define TMC_HEADER_SIZE sizeof(struct tmc_header)
 
 struct tmc_device {
-	spinlock_t lock;						/* Lock this structure */
-	struct mutex		lock_tmc_io;		/* Lock buffer lists during read/write calls */
+	/*
+	 * Members that are generally required for USB gadgets
+	 */
 	struct usb_gadget *gadget;
-	s8 interface;
-
-	struct usb_ep *bulk_in_ep;
-	struct usb_ep *bulk_out_ep;
-	struct usb_ep *interrupt_ep;
-
-	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
-	wait_queue_head_t tx_wait;				/* Wait until there are write buffers available to use. */
-
-	struct list_head rx_reqs;				/* List of free RX structs */
-	struct list_head rx_reqs_active;		/* List of Active RX xfers */
-	struct list_head rx_buffers;			/* List of completed xfers */
-
-	struct list_head tx_reqs;				/* List of free TX structs */
-	struct list_head tx_reqs_active;		/* List of Active TX xfers */
-
 	struct usb_function func;
 
+	/*
+	 * Device driver members
+	 */
+	struct device dev;
+	struct cdev	cdev;
+
+	/*
+	 * TMC gadget status members
+	 */
+	s8 interface;
 	enum tmc_state state;
+
+	/*
+	 * TMC specification members
+	 */
 	bool ren;
 	u8 status_byte;
 
+	/*
+	 * TMC response members
+	 */
 	struct capability_response capabilities;
 	struct status_response status;
 	struct interrupt_response interrupt;
 
+	/*
+	 * TMS message structure and message status members
+	 */
 	struct tmc_header header;
 	bool header_required;
 	size_t current_msg_bytes;
@@ -126,10 +131,34 @@ struct tmc_device {
 	size_t current_rx_bytes;
 	u8 *current_rx_buf;
 
+	/*
+	 * Synchronization members
+	 */
+	spinlock_t lock;						/* Lock this structure */
+	struct mutex		lock_tmc_io;		/* Lock buffer lists during read/write calls */
+	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
+	wait_queue_head_t tx_wait;				/* Wait until there are write buffers available to use. */
+
+	/*
+	 * Endpoint structures
+	 */
+	struct usb_ep *bulk_in_ep;
+	struct usb_ep *bulk_out_ep;
+	struct usb_ep *interrupt_ep;
+
+	/*
+	 * Endpoint requests
+	 */
 	struct usb_request *interrupt_req;
 
-	struct device dev;
-	struct cdev	cdev;
+	/*
+	 * TODO: Remove all of these lists
+	 */
+	struct list_head rx_reqs;				/* List of free RX structs */
+	struct list_head rx_reqs_active;		/* List of Active RX xfers */
+	struct list_head rx_buffers;			/* List of completed xfers */
+	struct list_head tx_reqs;				/* List of free TX structs */
+	struct list_head tx_reqs_active;		/* List of Active TX xfers */
 };
 
 struct f_tmc_opts {
