@@ -17,9 +17,10 @@
 #include <linux/device.h>
 #include <linux/types.h>
 
-#define __DEBUG__
+// #define __DEBUG__
+// #define __REMOVE_LIST_BUFFERS__
 
-#define NUM_BULK_REQUESTS				1
+#define NUM_BULK_REQUESTS				32
 
 #define TMC_INTF						0
 #define TMC_NUM_ENDPOINTS				3
@@ -138,6 +139,8 @@ struct tmc_device {
 	struct mutex		lock_tmc_io;		/* Lock buffer lists during read/write calls */
 	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
 	wait_queue_head_t tx_wait;				/* Wait until there are write buffers available to use. */
+	bool rx_complete;
+	bool tx_pending;
 
 	/*
 	 * Endpoint structures
@@ -149,16 +152,9 @@ struct tmc_device {
 	/*
 	 * Endpoint requests
 	 */
+	struct usb_request *bulk_out_req;
+	struct usb_request *bulk_in_req;
 	struct usb_request *interrupt_req;
-
-	/*
-	 * TODO: Remove all of these lists
-	 */
-	struct list_head rx_reqs;				/* List of free RX structs */
-	struct list_head rx_reqs_active;		/* List of Active RX xfers */
-	struct list_head rx_buffers;			/* List of completed xfers */
-	struct list_head tx_reqs;				/* List of free TX structs */
-	struct list_head tx_reqs_active;		/* List of Active TX xfers */
 };
 
 struct f_tmc_opts {
