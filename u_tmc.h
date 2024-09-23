@@ -17,9 +17,6 @@
 #include <linux/device.h>
 #include <linux/types.h>
 
-// #define __DEBUG__
-// #define __REMOVE_LIST_BUFFERS__
-
 #define NUM_BULK_REQUESTS				32
 
 #define TMC_INTF						0
@@ -181,5 +178,6 @@ struct f_tmc_opts {
 static inline struct tmc_device *func_to_tmc(struct usb_function *f) {
 	return container_of(f, struct tmc_device, func);
 }
+
 
 #endif /* USB_U_TMC_H_ */
