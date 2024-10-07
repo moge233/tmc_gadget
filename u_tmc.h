@@ -16,8 +16,7 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/types.h>
-
-#define NUM_BULK_REQUESTS				32
+#include <linux/ioctl.h>
 
 #define TMC_INTF						0
 #define TMC_NUM_ENDPOINTS				3
@@ -34,10 +33,6 @@
 #define TMC_VENDOR_SPECIFIC_IN			127
 #define TMC_488_TRIGGER					128
 
-enum tmc_state {
-	TMC_STATE_DISCONNECTED,
-	TMC_STATE_CONNECTED,
-};
 
 enum tmc_remote_local_state {
 	LOCS,
@@ -49,6 +44,16 @@ enum tmc_remote_local_state {
 enum tmc_transfer_attributes {
 	TMC_XFER_END_OF_MSG = 1,
 	TMC_XFER_TERM_CHAR_ENABLED = 2,
+};
+
+struct tmc488_capabilities {
+	u16 bcdUSBTMC;
+	u8 bmInterfaceCapabilities;
+	u8 bmDeviceCapabilities;
+	u8 reserved[6];
+	u16 bcdUSB488;
+	u8 bmInterfaceCapabilities488;
+	u8 bmDeviceCapabilities488;
 };
 
 struct capability_response {
@@ -71,6 +76,11 @@ struct status_response {
 };
 
 struct interrupt_response {
+	u8 tag;
+	u8 status_byte;
+};
+
+struct status_byte_response {
 	u8 tag;
 	u8 status_byte;
 };
@@ -104,7 +114,6 @@ struct tmc_device {
 	 * TMC gadget status members
 	 */
 	s8 interface;
-	enum tmc_state state;
 
 	/*
 	 * TMC specification members
@@ -115,9 +124,8 @@ struct tmc_device {
 	/*
 	 * TMC response members
 	 */
-	struct capability_response capabilities;
+	struct tmc488_capabilities capabilities;
 	struct status_response status;
-	struct interrupt_response interrupt;
 
 	/*
 	 * TMS message structure and message status members
