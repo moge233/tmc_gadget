@@ -12,11 +12,9 @@
 
 #include <linux/usb/composite.h>
 #include <linux/usb/gadget.h>
-#include <linux/usb/tmc.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/types.h>
-#include <linux/ioctl.h>
 
 #define TMC_INTF						0
 #define TMC_NUM_ENDPOINTS				3
@@ -39,6 +37,15 @@ enum tmc_remote_local_state {
 	LWLS,
 	REMS,
 	RWLS,
+};
+
+enum tmc_rl_state_machine_event {
+	TMC_EVENT_INITIATE_CLEAR,
+	TMC_EVENT_TRIGGER,
+	TMC_EVENT_DEV_DEP_MSG_OUT,
+	TMC_EVENT_GOTO_LOCAL,
+	TMC_EVENT_LOCAL_LOCKOUT,
+	TMC_EVENT_BUS_ACTIVITY,
 };
 
 enum tmc_transfer_attributes {
@@ -97,6 +104,8 @@ struct tmc_header {
 };
 #define TMC_HEADER_SIZE sizeof(struct tmc_header)
 
+typedef void (*IndicatorPulseHandler)(void);
+
 struct tmc_device {
 	/*
 	 * Members that are generally required for USB gadgets
@@ -114,12 +123,14 @@ struct tmc_device {
 	 * TMC gadget status members
 	 */
 	s8 interface;
+	bool connection_reset;
 
 	/*
 	 * TMC specification members
 	 */
-	bool ren;
+	u8 ren;
 	u8 status_byte;
+	enum tmc_remote_local_state rlstate;
 
 	/*
 	 * TMC response members
@@ -136,12 +147,16 @@ struct tmc_device {
 	struct usb_request *current_rx_req;
 	size_t current_rx_bytes;
 	u8 *current_rx_buf;
+	bool bulk_out_queued;
+	bool bulk_in_queued;
+	bool intr_in_queued;
+	u8 termchar;
 
 	/*
 	 * Synchronization members
 	 */
 	spinlock_t lock;						/* Lock this structure */
-	struct mutex		lock_tmc_io;		/* Lock buffer lists during read/write calls */
+	struct mutex lock_tmc_io;				/* Lock buffer lists during read/write calls */
 	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
 	wait_queue_head_t tx_wait;				/* Wait until there are write buffers available to use. */
 	bool rx_complete;
@@ -160,6 +175,11 @@ struct tmc_device {
 	struct usb_request *bulk_out_req;
 	struct usb_request *bulk_in_req;
 	struct usb_request *interrupt_req;
+
+	/*
+	 * Misc. members
+	 */
+	IndicatorPulseHandler indicator_pulse_handler;
 };
 
 struct f_tmc_opts {

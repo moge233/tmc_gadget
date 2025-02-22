@@ -9,11 +9,12 @@
 #include <linux/configfs.h>
 #include <linux/poll.h>
 #include <uapi/linux/usb/tmc.h>
+#include <uapi/linux/usb/tmc_dev.h>
 
 #include "u_tmc.h"
 
 static int major, minor;
-static bool ren = false;
+static u8 ren = 0;
 
 
 /*-------------------------------------------------------------------------
@@ -138,6 +139,19 @@ static void tmc_req_free(struct usb_ep *ep, struct usb_request *req)
 	}
 }
 
+static int tmc_try_halt_bulk_out_endpoint(struct tmc_device *tmc)
+{
+
+	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	u16 retry_count = 1000;
+	int err = 0;
+	while(((err = usb_ep_set_halt(tmc->bulk_out_ep)) == -EAGAIN) && (retry_count > 0)) {
+		--retry_count;
+	}
+
+	return err;
+}
+
 static struct usb_request *tmc_req_alloc(struct usb_ep *ep, unsigned len, gfp_t gfp_flags)
 {
 	struct usb_request	*req;
@@ -154,6 +168,75 @@ static struct usb_request *tmc_req_alloc(struct usb_ep *ep, unsigned len, gfp_t 
 	}
 
 	return req;
+}
+
+static int tmc_ioctl_set_stb(struct tmc_device *tmc, void __user *arg)
+{
+	u8 status_byte;
+
+	if (get_user(status_byte, (__u8 __user *)arg))
+		return -EFAULT;
+
+	tmc->status_byte = status_byte;
+	return 0;
+}
+
+static int tmc_rl_state_machine(struct tmc_device *tmc, enum tmc_rl_state_machine_event event)
+{
+	switch(tmc->rlstate) {
+	case LOCS:
+		if(tmc->ren) {
+			switch(event) {
+			case TMC_EVENT_INITIATE_CLEAR:
+			case TMC_EVENT_TRIGGER:
+			case TMC_EVENT_DEV_DEP_MSG_OUT:
+				tmc->rlstate = REMS;
+				break;
+			case TMC_EVENT_LOCAL_LOCKOUT:
+				tmc->rlstate = LWLS;
+				break;
+			default:
+				break;
+			}
+		}
+		break;
+	case LWLS:
+		switch(event) {
+		case TMC_EVENT_INITIATE_CLEAR:
+		case TMC_EVENT_TRIGGER:
+		case TMC_EVENT_DEV_DEP_MSG_OUT:
+			tmc->rlstate = RWLS;
+			break;
+		default:
+			break;
+		}
+		break;
+	case REMS:
+		switch(event) {
+		case TMC_EVENT_GOTO_LOCAL:
+		case TMC_EVENT_BUS_ACTIVITY:
+			tmc->rlstate = LOCS;
+			break;
+		case TMC_EVENT_LOCAL_LOCKOUT:
+			tmc->rlstate = RWLS;
+			break;
+		default:
+			break;
+		}
+		break;
+	case RWLS:
+		switch(event) {
+		case TMC_EVENT_GOTO_LOCAL:
+		case TMC_EVENT_BUS_ACTIVITY:
+			tmc->rlstate = LWLS;
+			break;
+		default:
+			break;
+		}
+		break;
+	}
+
+	return 0;
 }
 
 
@@ -186,7 +269,7 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 						 * There will not be any requests queued up at this point
 						 */
 						usb_ep_set_halt(tmc->bulk_out_ep);
-						printk("error: message length less than TMC header size\n");
+						dev_err(&tmc->dev, "error: message length less than TMC header size\n");
 						break;
 					}
 
@@ -218,6 +301,15 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 					else {
 						tmc->current_msg_bytes = TMC_HEADER_SIZE + tmc->header.TransferSize;
 					}
+
+					/*
+					 * Check the transfer attributes for a termination character
+					 */
+					if(tmc->header.MsgID == TMC_REQUEST_DEV_DEP_MSG_IN) {
+						if(tmc->header.bmTransferAttributes & 2) {
+							tmc->termchar = tmc->header.TermChar;
+						}
+					}
 					/*
 					 * The total number of bytes sent must be a multiple of 4 so check
 					 * for alignment bytes here
@@ -227,22 +319,72 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 									: 0;
 				}
 				tmc->rx_complete = true;
+				tmc->bulk_out_queued = false;
 			}
 			else {
 				tmc->rx_complete = false;
 			}
 			break;
 		case -ECONNRESET:
+			tmc->header_required = true;
+			tmc->rx_complete = false;
+			tmc->connection_reset = true;
+			dev_dbg(&tmc->dev, "---- case ECONNRESET, status: %d\n", status);
+			break;
 		case -ESHUTDOWN:
+			dev_dbg(&tmc->dev, "---- case ESHUTDOWN, status: %d\n", status);
 			break;
 		case -ECONNABORTED:
+			dev_dbg(&tmc->dev, "---- case ECONNABORTED, status: %d\n", status);
 			break;
 		case -EOVERFLOW:
+			dev_dbg(&tmc->dev, "---- case EOVERFLOW, status: %d\n", status);
+			break;
+		case -EPIPE:
+			dev_dbg(&tmc->dev, "---- case EPIPE, status: %d\n", status);
+			break;
 		default:
+			dev_dbg(&tmc->dev, "---- case default, status: %d\n", status);
+			break;
 	}
+
 	wake_up_interruptible(&tmc->rx_wait);
 	spin_unlock_irqrestore(&tmc->lock, flags);
 
+	return;
+}
+
+static void tmc_function_bulk_in_req_complete(struct usb_ep *ep, struct usb_request *req)
+{
+	struct tmc_device *tmc = ep->driver_data;
+
+	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+
+	switch (req->status) {
+	case 0:
+		tmc->bulk_in_queued = false;
+		break;
+	default:
+		printk("tx err %d\n", req->status);
+		fallthrough;
+	case -ECONNRESET:		/* unlink */
+	case -ESHUTDOWN:		/* disconnect etc */
+		printk("%s: SHUTDOWN\n", __func__);
+		break;
+	}
+
+	spin_lock(&tmc->lock);
+	tmc->tx_pending = false;
+	wake_up_interruptible(&tmc->tx_wait);
+	spin_unlock(&tmc->lock);
+
+	return;
+}
+
+static void tmc_function_interrupt_req_complete(struct usb_ep *ep, struct usb_request *req)
+{
+	struct tmc_device *tmc = ep->driver_data;
+	tmc->intr_in_queued = false;
 	return;
 }
 
@@ -268,6 +410,9 @@ static int tmc_setup_bulk_out_req(struct tmc_device *tmc)
 
 	if (error) {
 		dev_err(&tmc->dev, "%s, %s: could not queue bulk out endpoint (error %d)\n", __FILE__, __func__, error);
+	}
+	else {
+		tmc->bulk_out_queued = true;
 	}
 
 	return error;
@@ -322,7 +467,7 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 		}
 
 		/* Sleep until data is available */
-		wait_event_interruptible(tmc->rx_wait, (true == tmc->rx_complete));
+		wait_event_interruptible(tmc->rx_wait, ((true == tmc->rx_complete) || (true == tmc->connection_reset)));
 		spin_lock_irqsave(&tmc->lock, flags);
 	}
 
@@ -395,36 +540,15 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 	spin_unlock_irqrestore(&tmc->lock, flags);
 	mutex_unlock(&tmc->lock_tmc_io);
 
+	if(tmc->connection_reset) {
+		tmc->connection_reset = false;
+		return -ECONNRESET;
+	}
+
 	if (bytes_copied)
 		return bytes_copied;
 	else
 		return -EAGAIN;
-}
-
-static void tmc_function_bulk_in_req_complete(struct usb_ep *ep, struct usb_request *req)
-{
-	struct tmc_device *tmc = ep->driver_data;
-
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
-
-	switch (req->status) {
-	case 0:
-		break;
-	default:
-		printk("tx err %d\n", req->status);
-		fallthrough;
-	case -ECONNRESET:		/* unlink */
-	case -ESHUTDOWN:		/* disconnect etc */
-		printk("%s: SHUTDOWN\n", __func__);
-		break;
-	}
-
-	spin_lock(&tmc->lock);
-	tmc->tx_pending = false;
-	wake_up_interruptible(&tmc->tx_wait);
-	spin_unlock(&tmc->lock);
-
-	return;
 }
 
 static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf, size_t len, loff_t *offset)
@@ -514,6 +638,7 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		}
 		else {
 			tmc->tx_pending = true;
+			tmc->bulk_in_queued = true;
 		}
 	}
 
@@ -558,9 +683,10 @@ static __poll_t tmc_function_fops_poll(struct file *file, struct poll_table_stru
 	return ret;
 }
 
-long tmc_function_fops_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+long tmc_gadget_function_fops_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct tmc_device *tmc  = file->private_data;
+	long ret = 0;
 
 	dev_dbg(&tmc->dev, "%s, %s: cmd %u, arg %lu\n", __FILE__, __func__, cmd, arg);
 
@@ -568,17 +694,14 @@ long tmc_function_fops_ioctl(struct file *file, unsigned int cmd, unsigned long 
 	spin_lock_irqsave(&tmc->lock, flags);
 	switch(cmd)
 	{
-	case USBTMC_IOCTL_ABORT_BULK_OUT:
+	case USBTMC_DEV_IOCTL_ABORT_BULK_OUT:
 		usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req);
-	break;
-	case USBTMC_IOCTL_ABORT_BULK_IN:
 		break;
-	case USBTMC_IOCTL_GET_STB:
+	case USBTMC_DEV_IOCTL_ABORT_BULK_IN:
+		usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_out_req);
 		break;
-	case USBTMC_IOCTL_WRITE_RESULT: // USBTMC_IOCTL_SET_STB
-		tmc->status_byte = (u8) arg;
-		dev_dbg(&tmc->dev, "---- (u8) arg: %u\n", (u8) arg);
-		dev_dbg(&tmc->dev, "---- tmc->status_byte: %u\n", tmc->status_byte);
+	case USBTMC_DEV_IOCTL_SET_STB:
+		ret = (long) tmc_ioctl_set_stb(tmc, (void __user *)arg);
 		break;
 	default:
 		break;
@@ -611,7 +734,7 @@ static const struct file_operations f_tmc_fops = {
 	.write			= tmc_function_fops_write,
 	.read			= tmc_function_fops_read,
 	.poll			= tmc_function_fops_poll,
-	.unlocked_ioctl = tmc_function_fops_ioctl,
+	.unlocked_ioctl = tmc_gadget_function_fops_ioctl,
 	.llseek			= noop_llseek,
 };
 
@@ -731,6 +854,15 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 		printk("Unable to create character device\n");
 		goto error_cdev;
 	}
+
+	tmc->connection_reset = false;
+	tmc->bulk_out_queued = false;
+	tmc->bulk_in_queued = false;
+	tmc->intr_in_queued = false;
+	tmc->ren = 0;
+	tmc->rlstate = LOCS;
+	tmc->termchar = 0;
+	tmc->indicator_pulse_handler = NULL;
 
 	opts->tmc = tmc;
 
@@ -895,63 +1027,142 @@ static void tmc_function_disable(struct usb_function *f)
 	tmc_reset_interface(tmc);
 }
 
-static void tmc_function_interrupt_req_complete(struct usb_ep *ep, struct usb_request *req)
+static int tmc_function_ctrl_req_initiate_clear(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	// TODO
-	return;
-}
+	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	int ret = 0;
+	u16 w_length = le16_to_cpu(ctrl->wLength);
 
-static int tmc_function_initiate_clear(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
-{
-	int ret = -EOPNOTSUPP;
-	// TODO:
+	tmc_rl_state_machine(tmc, TMC_EVENT_INITIATE_CLEAR);
+
+	// Dequeue the bulk out endpoint if necessary
+	if(tmc->bulk_out_queued) {
+		ret = usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req);
+		if(ret) {
+			dev_err(&tmc->dev, "%s, could not dequeue bulk out endpoint (%d)\n", __func__, ret);
+		}
+		tmc->bulk_out_queued = false;
+	}
+
+	// Dequeue the bulk in endpoint if necessary
+	if(tmc->bulk_in_queued) {
+		ret = usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_in_req);
+		if(ret) {
+			dev_err(&tmc->dev, "%s, could not dequeue bulk in endpoint (%d)\n", __func__, ret);
+		}
+		tmc->bulk_in_queued = false;
+	}
+
+	// Halt the bulk out endpoint
+	ret = tmc_try_halt_bulk_out_endpoint(tmc);
+	if(ret) {
+		dev_err(&tmc->dev, "error halting bulk out endpoint (%d)\n", ret);
+		u8 response[] = { USBTMC_DEV_STATUS_FAILED };
+
+		memcpy(req->buf, (void *) &response, 1);
+		req->zero = 0;
+		req->length = w_length;
+		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+
+		if(ret) {
+			dev_err(&tmc->dev, "error queueing initiate clear response on control endpoint (%d)\n", ret);
+		}
+	}
+	else {
+		// Queue the control endpoint response from USBTMC 1.00 Table 31
+		u8 response[] = { USBTMC_DEV_STATUS_SUCCESS };
+
+		memcpy(req->buf, (void *) &response, 1);
+		req->zero = 0;
+		req->length = w_length;
+		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+
+		if(ret) {
+			dev_err(&tmc->dev, "error queueing initiate clear response on control endpoint (%d)\n", ret);
+		}
+		else {
+			// Clear all input and output buffers
+
+			// Flush the bulk out FIFO if necessary
+			if(usb_ep_fifo_status(tmc->bulk_out_ep) > 0) {
+				usb_ep_fifo_flush(tmc->bulk_out_ep);
+			}
+
+			// Flush the bulk in FIFO if necessary
+			if(usb_ep_fifo_status(tmc->bulk_in_ep) > 0) {
+				usb_ep_fifo_flush(tmc->bulk_in_ep);
+			}
+		}
+	}
 	return ret;
 }
 
-static int tmc_function_check_clear_status(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_check_clear_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	int ret = -EOPNOTSUPP;
-	// TODO:
+	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+
+	// TODO: handle the case where the bulk in FIFO cannot be emptied
+	int ret = 0;
+	u16 w_length = le16_to_cpu(ctrl->wLength);
+	u8 response[] = { USBTMC_DEV_STATUS_SUCCESS, 0 };
+
+	memcpy(req->buf, (void *) &response, w_length);
+	req->zero = 0;
+	req->length = w_length;
+	ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
 	return ret;
 }
 
-static int tmc_function_get_capabilities(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_get_capabilities(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = -EOPNOTSUPP;
 	u16 w_length = le16_to_cpu(ctrl->wLength);
 
 	struct capability_response response;
+	memset(&response, 0, sizeof(struct capability_response));
 
-	response.bcdUSBTMC = tmc->capabilities.bcdUSBTMC;
+	response.bcdUSBTMC = cpu_to_le16(tmc->capabilities.bcdUSBTMC);
 	response.bmInterfaceCapabilities = tmc->capabilities.bmInterfaceCapabilities;
 	response.bmDeviceCapabilities = tmc->capabilities.bmDeviceCapabilities;
-	response.bcdUSB488 = tmc->capabilities.bcdUSB488;
-	response.bmInterfaceCapabilities = tmc->capabilities.bmInterfaceCapabilities488;
-	response.bmDeviceCapabilities = tmc->capabilities.bmDeviceCapabilities488;
+	response.bcdUSB488 = cpu_to_le16(tmc->capabilities.bcdUSB488);
+	response.bmInterfaceCapabilities488 = tmc->capabilities.bmInterfaceCapabilities488;
+	response.bmDeviceCapabilities488 = tmc->capabilities.bmDeviceCapabilities488;
 
-	response.USBTMC_status = USBTMC_STATUS_SUCCESS;
+	response.USBTMC_status = USBTMC_DEV_STATUS_SUCCESS;
 	if(w_length != sizeof(struct capability_response)) {
-		response.USBTMC_status = USBTMC_STATUS_FAILED;
+		response.USBTMC_status = USBTMC_DEV_STATUS_FAILED;
 	}
 	ret = min_t(unsigned short, w_length, sizeof(struct capability_response));
-	memcpy(req->buf, (void *) &(tmc->capabilities), ret);
+	memcpy(req->buf, (void *) &response, ret);
+
+	req->zero = 0;
+	req->length = ret;
+	ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
 
 	return ret;
 }
 
-static int tmc_function_indicator_pulse(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_indicator_pulse(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	int ret = -EOPNOTSUPP;
+
+	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	int ret = 0;
 	if(tmc->capabilities.bmInterfaceCapabilities & USBTMC488_CAPABILITY_488_DOT_2) {
-		// TODO:
+		u16 w_length = le16_to_cpu(ctrl->wLength);
+		u8 response[] = { USBTMC_DEV_STATUS_SUCCESS };
+
+		memcpy(req->buf, (void *) &response, w_length);
+		req->zero = 0;
+		req->length = w_length;
+		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
 	}
 	else {
-		// TODO: Unhandled request
+		// TODO: Unhandled request; return a STALL handshake packet?
 	}
 	return ret;
 }
 
-static int tmc_function_read_status_byte(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 
 	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
@@ -964,11 +1175,11 @@ static int tmc_function_read_status_byte(struct tmc_device *tmc, const struct us
 
 	// Attempt to send the status byte via the interrupt endpoint
 	// per USBTMC 4.3.1.2
-	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_SR1) {
+	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_488_DOT_2) {
 
 		dev_dbg(&tmc->dev, "---- tmc->status_byte: %u\n", tmc->status_byte);
 		// USBTMC/USB488 3.4.2 Table 7
-		response.tag = (u8) (USB_DIR_IN | w_value);
+		response.tag = (u8) (USB_DIR_IN | (0x7F & w_value));
 		response.status_byte = tmc->status_byte;
 
 		ret = sizeof(response);
@@ -979,8 +1190,11 @@ static int tmc_function_read_status_byte(struct tmc_device *tmc, const struct us
 		tmc->interrupt_req->context = tmc;
 		memcpy(tmc->interrupt_req->buf, (void *) &(response), ret);
 
-		// Attempt to send it
+		// Attempt to send it on the interrupt endpoint first
 		ret = usb_ep_queue(tmc->interrupt_ep, tmc->interrupt_req, GFP_ATOMIC);
+		if(!ret) {
+			tmc->intr_in_queued = true;
+		}
 
 		dev_dbg(&tmc->dev, "---- queued interrupt request; ret = %d\n", ret);
 
@@ -988,36 +1202,66 @@ static int tmc_function_read_status_byte(struct tmc_device *tmc, const struct us
 		if(!ret) {
 			tmc->status.USBTMC_status = USBTMC_STATUS_SUCCESS;
 			tmc->status.tag = (u8) w_value;
-			tmc->status.status_byte = 0;
+			tmc->status.status_byte = tmc->status_byte;
 
-			ret = min_t(unsigned short, w_length, sizeof(struct status_byte_response));
+			ret = w_length;
 			memcpy(req->buf, (void *) &(tmc->status), ret);
+
+			req->zero = 0;
+			req->length = ret;
+			ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
 
 			dev_dbg(&tmc->dev, "---- status byte copied to control endpoint\n");
 		}
 	}
+	else
+	{
+		// When a device does not have an interrupt endpoint, the device must
+		// queue a control endpoint response as shown in Table 12
+		// per USBTMC 4.3.1.1
+		tmc->status.USBTMC_status = USBTMC_DEV_STATUS_SUCCESS;
+		tmc->status.tag = (u8) w_value;
+		tmc->status.status_byte = tmc->status_byte;
+
+		ret = w_length;
+		memcpy(req->buf, (void *) &(tmc->status), ret);
+
+		req->zero = 0;
+		req->length = ret;
+		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+
+		dev_dbg(&tmc->dev, "---- status byte copied to control endpoint\n");
+	}
 
 	return ret;
 }
 
-static int tmc_function_ren_control(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_ren_control(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	int ret = -EOPNOTSUPP;
-	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_RL1) {
-		// TODO:
+	int ret = 0;
+	u16 w_value = le16_to_cpu(ctrl->wValue);
+	u16 w_length = le16_to_cpu(ctrl->wLength);
+	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_REN_CONTROL) {
+		ren = 0xFF & w_value;
+		u8 response[] = { USBTMC_DEV_STATUS_SUCCESS };
+
+		memcpy(req->buf, (void *) &response, w_length);
+		req->zero = 0;
+		req->length = w_length;
+		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
 	}
 	else {
-		// TODO: Need to stall here
+		// Return a stall handshake packet
 	}
 
 	return ret;
 }
 
-static int tmc_function_goto_local(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_goto_local(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = -EOPNOTSUPP;
 
-	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_RL1) {
+	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_REN_CONTROL) {
 		// TODO:
 	}
 	else {
@@ -1027,7 +1271,7 @@ static int tmc_function_goto_local(struct tmc_device *tmc, const struct usb_ctrl
 	return ret;
 }
 
-static int tmc_function_local_lockout(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_local_lockout(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = -EOPNOTSUPP;
 
@@ -1038,38 +1282,59 @@ static int tmc_function_local_lockout(struct tmc_device *tmc, const struct usb_c
 	return ret;
 }
 
-static int tmc_function_initiate_abort_bulk_out(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_initiate_abort_bulk_out(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	int ret = -EOPNOTSUPP;
+	int ret = 0;
+	int status = 0;
+	u8 response[2] = { 0 };
 
 	tmc->header_required = true;
 	tmc->current_rx_bytes = 0;
 	tmc->current_msg_bytes = 0;
 
-	usb_ep_set_halt(tmc->bulk_out_ep);
+	u8 current_tag = tmc->header.bTag;
+	u8 bulk_out_tag = ctrl->wValue & 0xFF;
 
-	u8 response[] = {USBTMC_STATUS_SUCCESS, ctrl->wValue & 0xFF};
-	ret = sizeof(response);
-	memcpy(req->buf, (void *) &response[0], ret);
+	memset(&tmc->header, 0, sizeof(struct tmc_header));
+
+	if(current_tag == bulk_out_tag)
+	{
+		status = USBTMC_DEV_STATUS_SUCCESS;
+		usb_ep_set_halt(tmc->bulk_out_ep);
+
+		req->buf = response;
+		req->zero = 0;
+		req->length = 2;
+		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+		if(ret < 0) {
+			dev_err(&tmc->dev, "usb_ep_queue failed on gadget->ep0 with error code %d\n", ret);
+		}
+
+		usb_ep_fifo_flush(tmc->bulk_out_ep);
+	}
+	else
+	{
+		status = USBTMC_DEV_STATUS_TRANSFER_NOT_IN_PROGRESS;
+	}
 
 	return ret;
 }
 
-static int tmc_function_check_abort_bulk_out_status(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_check_abort_bulk_out_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = -EOPNOTSUPP;
 	// TODO:
 	return ret;
 }
 
-static int tmc_function_initiate_abort_bulk_in(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = -EOPNOTSUPP;
 	// TODO:
 	return ret;
 }
 
-static int tmc_function_check_abort_bulk_in_status(struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+static int tmc_function_ctrl_req_check_abort_bulk_in_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = -EOPNOTSUPP;
 	// TODO:
@@ -1091,28 +1356,28 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 	if(ctrl->bRequestType == (USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_IN)) {
 		switch (ctrl->bRequest) {
 			case USBTMC_REQUEST_INITIATE_CLEAR:
-				value = tmc_function_initiate_clear(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_initiate_clear(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC_REQUEST_CHECK_CLEAR_STATUS:
-				value = tmc_function_check_clear_status(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_check_clear_status(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC_REQUEST_GET_CAPABILITIES:
-				value = tmc_function_get_capabilities(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_get_capabilities(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC_REQUEST_INDICATOR_PULSE:
-				value = tmc_function_indicator_pulse(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_indicator_pulse(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC488_REQUEST_READ_STATUS_BYTE:
-				value = tmc_function_read_status_byte(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_read_status_byte(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC488_REQUEST_REN_CONTROL:
-				value = tmc_function_ren_control(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_ren_control(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC488_REQUEST_GOTO_LOCAL:
-				value = tmc_function_goto_local(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_goto_local(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC488_REQUEST_LOCAL_LOCKOUT:
-				value = tmc_function_local_lockout(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_local_lockout(cdev, tmc, ctrl, req);
 				break;
 			default:
 				dev_info(&tmc->dev, "%s: unhandled request (bRequest: %d)\n", __func__, ctrl->bRequest);
@@ -1122,29 +1387,20 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 	else if(ctrl->bRequestType == (USB_TYPE_CLASS | USB_RECIP_ENDPOINT | USB_DIR_IN)) {
 		switch(ctrl->bRequest) {
 			case USBTMC_REQUEST_INITIATE_ABORT_BULK_OUT:
-				value = tmc_function_initiate_abort_bulk_out(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_initiate_abort_bulk_out(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
-				value = tmc_function_check_abort_bulk_out_status(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_check_abort_bulk_out_status(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC_REQUEST_INITIATE_ABORT_BULK_IN:
-				value = tmc_function_initiate_abort_bulk_in(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_initiate_abort_bulk_in(cdev, tmc, ctrl, req);
 				break;
 			case USBTMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
-				value = tmc_function_check_abort_bulk_in_status(tmc, ctrl, req);
+				value = tmc_function_ctrl_req_check_abort_bulk_in_status(cdev, tmc, ctrl, req);
 				break;
 			default:
 				dev_info(&tmc->dev, "%s: unhandled request (bRequest: %d)\n", __func__, ctrl->bRequest);
 				dev_info(&tmc->dev, "%s: wValue: %d, wIndex: %d, wLength: %d\n", __func__, w_value, w_index, w_length);
-		}
-	}
-
-	if(value >= 0) {
-		req->zero = 0;
-		req->length = value;
-		value = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
-		if(value < 0) {
-			dev_err(&tmc->dev, "usb_ep_queue failed on gadget->ep0 with error code %d\n", value);
 		}
 	}
 
@@ -1153,11 +1409,15 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 
 static void tmc_function_suspend(struct usb_function *f)
 {
+	struct tmc_device *tmc = func_to_tmc(f);
+	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
 	return;
 }
 
 static void tmc_function_resume(struct usb_function *f)
 {
+	struct tmc_device *tmc = func_to_tmc(f);
+	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
 	return;
 }
 
@@ -1489,7 +1749,7 @@ static ssize_t f_tmc_ren_store(struct config_item *item, const char *page, size_
 		return result;
 	}
 
-	ren = (bool) num;
+	ren = num;
 	result = len;
 	mutex_unlock(&opts->lock);
 
