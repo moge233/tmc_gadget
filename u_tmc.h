@@ -54,53 +54,53 @@ enum tmc_transfer_attributes {
 };
 
 struct tmc488_capabilities {
-	u16 bcdUSBTMC;
-	u8 bmInterfaceCapabilities;
-	u8 bmDeviceCapabilities;
-	u8 reserved[6];
-	u16 bcdUSB488;
-	u8 bmInterfaceCapabilities488;
-	u8 bmDeviceCapabilities488;
+	uint16_t bcdUSBTMC;
+	uint8_t bmInterfaceCapabilities;
+	uint8_t bmDeviceCapabilities;
+	uint8_t reserved[6];
+	uint16_t bcdUSB488;
+	uint8_t bmInterfaceCapabilities488;
+	uint8_t bmDeviceCapabilities488;
 };
 
 struct capability_response {
-	u8 USBTMC_status;
-	u8 reserved1;
-	u16 bcdUSBTMC;
-	u8 bmInterfaceCapabilities;
-	u8 bmDeviceCapabilities;
-	u8 reserved2[6];
-	u16 bcdUSB488;
-	u8 bmInterfaceCapabilities488;
-	u8 bmDeviceCapabilities488;
-	u8 reserved3[8];
+	uint8_t USBTMC_status;
+	uint8_t reserved1;
+	uint16_t bcdUSBTMC;
+	uint8_t bmInterfaceCapabilities;
+	uint8_t bmDeviceCapabilities;
+	uint8_t reserved2[6];
+	uint16_t bcdUSB488;
+	uint8_t bmInterfaceCapabilities488;
+	uint8_t bmDeviceCapabilities488;
+	uint8_t reserved3[8];
 };
 
 struct status_response {
-	u8 USBTMC_status;
-	u8 tag;
-	u8 status_byte;
+	uint8_t USBTMC_status;
+	uint8_t tag;
+	uint8_t status_byte;
 };
 
 struct interrupt_response {
-	u8 tag;
-	u8 status_byte;
+	uint8_t tag;
+	uint8_t status_byte;
 };
 
 struct status_byte_response {
-	u8 tag;
-	u8 status_byte;
+	uint8_t tag;
+	uint8_t status_byte;
 };
 
 struct tmc_header {
-	u8 MsgID;
-	u8 bTag;
-	u8 bTagInverse;
-	u8 reserved1;
-	u32 TransferSize;
-	u8 bmTransferAttributes;
-	u8 TermChar;
-	u8 reserved2[2];
+	uint8_t MsgID;
+	uint8_t bTag;
+	uint8_t bTagInverse;
+	uint8_t reserved1;
+	uint32_t TransferSize;
+	uint8_t bmTransferAttributes;
+	uint8_t TermChar;
+	uint8_t reserved2[2];
 };
 #define TMC_HEADER_SIZE sizeof(struct tmc_header)
 
@@ -122,14 +122,14 @@ struct tmc_device {
 	/*
 	 * TMC gadget status members
 	 */
-	s8 interface;
+	int8_t interface;
 	bool connection_reset;
 
 	/*
 	 * TMC specification members
 	 */
-	u8 ren;
-	u8 status_byte;
+	uint8_t ren;
+	uint8_t status_byte;
 	enum tmc_remote_local_state rlstate;
 
 	/*
@@ -146,11 +146,11 @@ struct tmc_device {
 	size_t current_msg_bytes;
 	struct usb_request *current_rx_req;
 	size_t current_rx_bytes;
-	u8 *current_rx_buf;
+	uint8_t *current_rx_buf;
 	bool bulk_out_queued;
 	bool bulk_in_queued;
 	bool intr_in_queued;
-	u8 termchar;
+	uint8_t termchar;
 
 	/*
 	 * Synchronization members
@@ -190,15 +190,15 @@ struct f_tmc_opts {
 
 	/* TMC Capabilities */
 	/* Section 4.2.1.8 of USB TMC Specification Revision 1.0*/
-	u16 bcdUSBTMC;
-	u8 bmInterfaceCapabilities;
-	u8 bmDeviceCapabilities;
+	uint16_t bcdUSBTMC;
+	uint8_t bmInterfaceCapabilities;
+	uint8_t bmDeviceCapabilities;
 
 	/* 488 Capabilities */
 	/* Section 4.2.2 of USB TMC/USB 488 Subclass Specification Revision 1.0 */
-	u16 bcdUSB488;
-	u8 bmInterfaceCapabilities488;
-	u8 bmDeviceCapabilities488;
+	uint16_t bcdUSB488;
+	uint8_t bmInterfaceCapabilities488;
+	uint8_t bmDeviceCapabilities488;
 };
 
 #define fi_to_f_tmc_opts(f)	container_of(f, struct f_tmc_opts, func_inst)
