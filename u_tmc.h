@@ -123,6 +123,7 @@ struct tmc_device {
 	 * TMC gadget status members
 	 */
 	int8_t interface;
+	bool is_shutdown;
 	bool connection_reset;
 
 	/*
@@ -143,11 +144,16 @@ struct tmc_device {
 	 */
 	struct tmc_header header;
 	bool header_required;
+	bool tx_header_required;
 	size_t current_msg_bytes;				/* Total length of the current TMC message */
+	size_t current_tx_msg_bytes;			/* Total length of the current TX TMC message */
+	size_t current_remaining_tx_msg_bytes;	/* Total remaining length of the current TX TMC message */
 	struct usb_request *current_rx_req;
 	size_t current_rx_bytes;				/* Current available RX bytes to read */
 	uint8_t *current_rx_buf;
 	size_t current_tx_bytes;				/* Current available TX bytes to send */
+	uint8_t previous_bulk_out_tag;			/* The last bulk OUT bTag */
+	uint8_t previous_bulk_in_tag;			/* The last bulk IN bTag */
 	bool bulk_out_queued;
 	bool bulk_in_queued;
 	bool intr_in_queued;
