@@ -211,7 +211,7 @@ static int tmc_try_halt_bulk_out_endpoint(struct tmc_device *tmc)
 	int err;
 	retry_count = 1000;
 	err = 0;
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 	while(((err = usb_ep_set_halt(tmc->bulk_out_ep)) == -EAGAIN) && (retry_count > 0)) { // @suppress("Symbol is not resolved")
 		--retry_count;
 	}
@@ -326,7 +326,7 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 	int status = req->status;
 	unsigned long flags = 0;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	spin_lock_irqsave(&tmc->lock, flags);
 
@@ -435,7 +435,7 @@ static void tmc_function_bulk_in_req_complete(struct usb_ep *ep, struct usb_requ
 {
 	struct tmc_device *tmc = ep->driver_data;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	switch (req->status) {
 	case 0:
@@ -470,7 +470,7 @@ static int tmc_setup_bulk_out_req(struct tmc_device *tmc)
 	struct usb_request *req;
 	int error = 0;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	req = tmc->bulk_out_req;
 
@@ -505,7 +505,7 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 	unsigned long flags = 0;
 	size_t size;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	if(len == 0) {
 		return -EINVAL; // @suppress("Symbol is not resolved")
@@ -637,7 +637,7 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 	struct usb_request *req;
 	int value;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	if (len == 0)
 		return -EINVAL; // @suppress("Symbol is not resolved")
@@ -674,6 +674,8 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		req->complete = tmc_function_bulk_in_req_complete;
 		req->length = size;
 
+		tmc->current_tx_bytes = size;
+
 		/* Check if we need to send a zero length packet. */
 		if (len > size)
 		{
@@ -700,6 +702,7 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		bytes_copied += size;
 		len -= size;
 		buf += size;
+		tmc->current_tx_bytes -= size;
 
 		spin_lock_irqsave(&tmc->lock, flags);
 
@@ -709,6 +712,7 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		spin_lock(&tmc->lock);
 		if (value) {
 			tmc->tx_pending = false;
+			tmc->bulk_in_queued = false;
 			spin_unlock_irqrestore(&tmc->lock, flags);
 			mutex_unlock(&tmc->lock_tmc_io);
 			return -EAGAIN; // @suppress("Symbol is not resolved")
@@ -735,7 +739,7 @@ static __poll_t tmc_function_fops_poll(struct file *file, struct poll_table_stru
 	struct tmc_device *tmc  = file->private_data;
 	__poll_t	ret = 0;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	mutex_lock(&tmc->lock_tmc_io);
 	spin_lock_irqsave(&tmc->lock, flags);
@@ -802,7 +806,7 @@ static int tmc_function_fops_open(struct inode *inode, struct file *file)
 	struct tmc_device *tmc;
 
 	tmc = container_of(inode->i_cdev, struct tmc_device, cdev);
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 	file->private_data = tmc;
 	return 0;
 }
@@ -836,7 +840,7 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	struct tmc_device *tmc = func_to_tmc(f);
 	int ret = -EINVAL; // @suppress("Symbol is not resolved")
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	opts = fi_to_f_tmc_opts(f->fi);
 
@@ -944,6 +948,7 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	tmc->rlstate = LOCS;
 	tmc->termchar = 0;
 	tmc->indicator_pulse_handler = NULL;
+	tmc->abort_bulk_in_complete = false;
 
 	opts->tmc = tmc;
 
@@ -968,7 +973,7 @@ static void tmc_function_unbind(struct usb_configuration *c, struct usb_function
 {
 	struct tmc_device *tmc = func_to_tmc(f);
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	cdev_device_del(&tmc->cdev, &tmc->dev);
 
@@ -992,7 +997,7 @@ static int tmc_set_interface(struct tmc_device *tmc)
 {
 	int result = 0;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	tmc->bulk_in_ep->desc = ep_desc(tmc->gadget, &tmc_bulk_in_ep_fs, &tmc_bulk_in_ep_hs, NULL);
 	tmc->bulk_in_ep->driver_data = tmc;
@@ -1044,7 +1049,7 @@ static void tmc_reset_interface(struct tmc_device *tmc)
 
 	unsigned long	flags;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	if (tmc->interface < 0)
 		return;
@@ -1070,7 +1075,7 @@ static int set_interface(struct tmc_device *tmc, unsigned number)
 {
 	int	result = 0;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	/* Free the current interface */
 	tmc_reset_interface(tmc);
@@ -1089,7 +1094,7 @@ static int tmc_function_set_alt(struct usb_function *f, unsigned interface, unsi
 	struct tmc_device *tmc = func_to_tmc(f);
 	int ret = -ENOTSUPP;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	if(!alt)
 		ret = set_interface(tmc, interface);
@@ -1102,7 +1107,7 @@ static void tmc_function_disable(struct usb_function *f)
 
 	struct tmc_device *tmc = func_to_tmc(f);
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	tmc_reset_interface(tmc);
 }
@@ -1112,7 +1117,8 @@ static int tmc_function_ctrl_req_initiate_clear(struct usb_composite_dev *cdev, 
 	int ret = 0;
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
 	uint8_t response[] = { USBTMC_STATUS_SUCCESS };
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	tmc_rl_state_machine(tmc, TMC_EVENT_INITIATE_CLEAR);
 
@@ -1182,7 +1188,7 @@ static int tmc_function_ctrl_req_check_clear_status(struct usb_composite_dev *cd
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
 	uint8_t response[] = { USBTMC_STATUS_SUCCESS, 0 };
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	memcpy(req->buf, (void *) &response, w_length);
 	req->zero = 0;
@@ -1224,7 +1230,7 @@ static int tmc_function_ctrl_req_indicator_pulse(struct usb_composite_dev *cdev,
 {
 	int ret = 0;
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	if(tmc->capabilities.bmInterfaceCapabilities & USBTMC488_CAPABILITY_488_DOT_2) {
 		uint16_t w_length = le16_to_cpu(ctrl->wLength);
@@ -1248,7 +1254,7 @@ static int tmc_function_ctrl_req_read_status_byte(struct usb_composite_dev *cdev
 	uint16_t w_value = le16_to_cpu(ctrl->wValue);
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	// Attempt to send the status byte via the interrupt endpoint
 	// per USBTMC 4.3.1.2
@@ -1319,6 +1325,9 @@ static int tmc_function_ctrl_req_ren_control(struct usb_composite_dev *cdev, str
 	int ret = 0;
 	uint16_t w_value = le16_to_cpu(ctrl->wValue);
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
+
+	dev_dbg(&tmc->dev, "%s\n", __func__);
+
 	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_REN_CONTROL) {
 		ren = 0xFF & w_value;
 		memcpy(req->buf, (void *) &response, w_length);
@@ -1337,6 +1346,8 @@ static int tmc_function_ctrl_req_goto_local(struct usb_composite_dev *cdev, stru
 {
 	int ret = -EOPNOTSUPP; // @suppress("Symbol is not resolved")
 
+	dev_dbg(&tmc->dev, "%s\n", __func__);
+
 	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_REN_CONTROL) {
 		// TODO:
 	}
@@ -1351,8 +1362,124 @@ static int tmc_function_ctrl_req_local_lockout(struct usb_composite_dev *cdev, s
 {
 	int ret = -EOPNOTSUPP; // @suppress("Symbol is not resolved")
 
+	dev_dbg(&tmc->dev, "%s\n", __func__);
+
 	if(tmc->capabilities.bmDeviceCapabilities488 & USBTMC488_CAPABILITY_RL1) {
 		// TODO:
+	}
+
+	return ret;
+}
+
+static int tmc_function_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+{
+	int ret = 0;
+	int status = 0;
+	uint8_t current_tag = tmc->header.bTag;
+	uint8_t bulk_in_tag = ctrl->wValue & 0xFF;
+	uint8_t response[2] = { 0 };
+
+	dev_dbg(&tmc->dev, "%s\n", __func__);
+
+	memset(&tmc->header, 0, sizeof(struct tmc_header));
+
+	if(current_tag == bulk_in_tag)
+	{
+		dev_dbg(&tmc->dev, "---- current_tag == bulk_in_tag(%u)\n", current_tag);
+		status = USBTMC_STATUS_SUCCESS;
+		response[0] = status;
+		response[1] = current_tag;
+
+		ret = usb_ep_set_halt(tmc->bulk_in_ep);
+		if (ret < 0)
+		{
+			dev_err(&tmc->dev, "usb_ep_set_halt failed on tmc->bulk_in_ep with error code %d\n", ret);
+		}
+
+		if(tmc->bulk_in_queued)
+		{
+			dev_dbg(&tmc->dev, "---- bulk_in_ep queued\n");
+			ret = usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_in_req);
+			if(ret < 0)
+			{
+				dev_err(&tmc->dev, "usb_ep_dequeue failed on tmc->bulk_in_ep with error code %d\n", ret);
+			}
+			else
+			{
+				tmc->bulk_in_queued = false;
+			}
+		}
+		else
+		{
+			dev_dbg(&tmc->dev, "--- bulk_in_ep not queued\n");
+		}
+
+		dev_dbg(&tmc->dev, "--- attempting to send short packet\n");
+		tmc->bulk_in_req->complete = tmc_function_bulk_in_req_complete;
+		tmc->bulk_in_req->length = 0;
+		tmc->bulk_in_req->zero = 1;
+		ret = usb_ep_queue(tmc->bulk_in_ep, tmc->bulk_in_req, GFP_ATOMIC);
+		if (ret < 0)
+		{
+			dev_err(&tmc->dev, "usb_ep_queue failed on tmc->bulk_in_ep with error code %d\n", ret);
+		}
+		else
+		{
+			tmc->current_tx_bytes = 0;
+			tmc->tx_pending = false;
+			tmc->bulk_in_queued = false;
+			tmc->header_required = true;
+			tmc->abort_bulk_in_complete = true;
+		}
+	}
+	else if (tmc->bulk_in_queued || (usb_ep_fifo_status(tmc->bulk_out_ep) > 0))
+	{
+		dev_dbg(&tmc->dev, "---- current_tag != bulk_in_tag(%u, %u)\n", current_tag, bulk_in_tag);
+		dev_dbg(&tmc->dev, "-------- and either a transfer is in progress or the RX FIFO is not emnpty\n");
+		status = USBTMC_STATUS_TRANSFER_NOT_IN_PROGRESS;
+		response[0] = status;
+		response[1] = current_tag;
+	}
+	else
+	{
+		dev_dbg(&tmc->dev, "---- current_tag != bulk_in_tag(%u, %u) and RX FIFO is empty\n", current_tag, bulk_in_tag);
+		status = USBTMC_STATUS_FAILED;
+		response[0] = status;
+		response[1] = current_tag;
+	}
+
+	memcpy(req->buf, (void *) &response, 2);
+	req->zero = 0;
+	req->length = 2;
+
+	ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+	if(ret < 0) {
+		dev_err(&tmc->dev, "usb_ep_queue failed on gadget->ep0 with error code %d\n", ret);
+	}
+
+	return ret;
+}
+
+static int tmc_function_ctrl_req_check_abort_bulk_in_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
+{
+	int ret = 0;
+	uint8_t response[8] = { 0 };
+
+	dev_dbg(&tmc->dev, "%s\n", __func__);
+
+	if (tmc->abort_bulk_in_complete)
+	{
+		tmc->abort_bulk_in_complete = false;
+		response[0] = USBTMC_STATUS_SUCCESS;
+	}
+
+	memcpy(req->buf, (void *) &response, 8);
+	req->zero = 0;
+	req->length = 8;
+
+	ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+	if(ret < 0) {
+		dev_err(&tmc->dev, "usb_ep_queue failed on gadget->ep0 with error code %d\n", ret);
 	}
 
 	return ret;
@@ -1363,21 +1490,25 @@ static int tmc_function_ctrl_req_initiate_abort_bulk_out(struct usb_composite_de
 	int ret = 0;
 	int status = 0;
 	uint8_t current_tag = tmc->header.bTag;
-	uint8_t bulk_out_tag = ctrl->wValue & 0xFF;
+	uint8_t bulk_in_tag = ctrl->wValue & 0xFF;
 	uint8_t response[2] = { 0 };
 
 	tmc->header_required = true;
 	tmc->current_rx_bytes = 0;
 	tmc->current_msg_bytes = 0;
 
+	dev_dbg(&tmc->dev, "%s\n", __func__);
+
 	memset(&tmc->header, 0, sizeof(struct tmc_header));
 
-	if(current_tag == bulk_out_tag)
+	if(current_tag == bulk_in_tag)
 	{
-		status = USBTMC_STATUS_SUCCESS;
-		usb_ep_set_halt(tmc->bulk_out_ep);
 
-		req->buf = response;
+		dev_dbg(&tmc->dev, "---- current_tag == bulk_in_tag (%u)\n", current_tag);
+		status = USBTMC_STATUS_SUCCESS;
+		usb_ep_set_halt(tmc->bulk_in_ep);
+
+		memcpy(req->buf, (void *) &response, 2);
 		req->zero = 0;
 		req->length = 2;
 		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
@@ -1385,31 +1516,15 @@ static int tmc_function_ctrl_req_initiate_abort_bulk_out(struct usb_composite_de
 			dev_err(&tmc->dev, "usb_ep_queue failed on gadget->ep0 with error code %d\n", ret);
 		}
 
-		usb_ep_fifo_flush(tmc->bulk_out_ep);
+		if(usb_ep_fifo_status(tmc->bulk_in_ep))
+		{
+			usb_ep_fifo_flush(tmc->bulk_in_ep);
+		}
 	}
-	else
-	{
-		status = USBTMC_STATUS_TRANSFER_NOT_IN_PROGRESS;
-	}
-
 	return ret;
 }
 
 static int tmc_function_ctrl_req_check_abort_bulk_out_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
-{
-	int ret = -EOPNOTSUPP; // @suppress("Symbol is not resolved")
-	// TODO:
-	return ret;
-}
-
-static int tmc_function_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
-{
-	int ret = -EOPNOTSUPP; // @suppress("Symbol is not resolved")
-	// TODO:
-	return ret;
-}
-
-static int tmc_function_ctrl_req_check_abort_bulk_in_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = -EOPNOTSUPP; // @suppress("Symbol is not resolved")
 	// TODO:
@@ -1426,7 +1541,7 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 	uint16_t w_value = le16_to_cpu(ctrl->wValue);
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	if(ctrl->bRequestType == (USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_IN)) {
 		switch (ctrl->bRequest) {
@@ -1485,14 +1600,14 @@ static int tmc_function_setup(struct usb_function *f, const struct usb_ctrlreque
 static void tmc_function_suspend(struct usb_function *f)
 {
 	struct tmc_device *tmc = func_to_tmc(f);
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 	return;
 }
 
 static void tmc_function_resume(struct usb_function *f)
 {
 	struct tmc_device *tmc = func_to_tmc(f);
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 	return;
 }
 
@@ -1524,7 +1639,7 @@ static void tmc_free_func(struct usb_function *f)
 {
 	struct tmc_device *tmc = func_to_tmc(f);
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	kfree(tmc);
 }
@@ -1551,7 +1666,7 @@ static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 		return ERR_PTR(ret);
 	}
 
-	dev_dbg(&tmc->dev, "%s, %s\n", __FILE__, __func__);
+	dev_dbg(&tmc->dev, "%s\n", __func__);
 
 	memset(&tmc->status, 0, sizeof(struct status_response));
 
@@ -1579,6 +1694,7 @@ static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 	tmc->current_rx_req = NULL;
 	tmc->current_rx_bytes = 0;
 	tmc->current_rx_buf = NULL;
+	tmc->current_tx_bytes = 0;
 
 	return &tmc->func;
 }

@@ -143,13 +143,15 @@ struct tmc_device {
 	 */
 	struct tmc_header header;
 	bool header_required;
-	size_t current_msg_bytes;
+	size_t current_msg_bytes;				/* Total length of the current TMC message */
 	struct usb_request *current_rx_req;
-	size_t current_rx_bytes;
+	size_t current_rx_bytes;				/* Current available RX bytes to read */
 	uint8_t *current_rx_buf;
+	size_t current_tx_bytes;				/* Current available TX bytes to send */
 	bool bulk_out_queued;
 	bool bulk_in_queued;
 	bool intr_in_queued;
+	bool abort_bulk_in_complete;
 	uint8_t termchar;
 
 	/*
