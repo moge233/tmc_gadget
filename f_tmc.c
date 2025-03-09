@@ -11,7 +11,6 @@
 #include <linux/poll.h>
 #include <uapi/linux/usb/tmc.h>
 #include <linux/types.h>
-// #include <uapi/linux/usb/tmc_dev.h>
 
 #include "u_tmc.h"
 
@@ -663,121 +662,12 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf, size_t len, loff_t *offset) // @suppress("Type cannot be resolved")
 {
 	struct tmc_device *tmc = file->private_data;
-#ifndef WRITE_LARGE_BUFFERS
-	unsigned long flags;
-	size_t size;
-	size_t bytes_copied = 0;
-	struct usb_request *req;
-	int value;
-
-	dev_dbg(&tmc->dev, "%s\n", __func__);
-
-	if (len == 0)
-	{
-		return -EINVAL;
-	}
-
-	if (tmc->is_shutdown)
-	{
-		return -ESHUTDOWN;
-	}
-
-	mutex_lock(&tmc->lock_tmc_io);
-	spin_lock_irqsave(&tmc->lock, flags);
-
-	if(tmc->tx_pending) {
-		/* Turn interrupts back on before sleeping. */
-		spin_unlock_irqrestore(&tmc->lock, flags);
-
-		/*
-		 * If write buffers are available check if this is
-		 * a NON-Blocking call or not.
-		 */
-		if (file->f_flags & (O_NONBLOCK | O_NDELAY)) {
-			mutex_unlock(&tmc->lock_tmc_io);
-			return -EAGAIN;
-		}
-
-		wait_event_interruptible(tmc->tx_wait, (false == tmc->tx_pending)); // @suppress("Type cannot be resolved")
-		spin_lock_irqsave(&tmc->lock, flags);
-	}
-
-	while((false == tmc->tx_pending) && len) {
-
-		if (len > TMC_BULK_ENDPOINT_SIZE)
-			size = TMC_BULK_ENDPOINT_SIZE;
-		else
-			size = len;
-
-		req = tmc->bulk_in_req;
-		req->complete = tmc_function_bulk_in_req_complete;
-		req->length = size;
-		tmc->current_tx_bytes = size;
-
-		/* Check if we need to send a zero length packet. */
-		if (len > size)
-		{
-			/* They will be more TX requests so no yet. */
-			req->zero = 0;
-		}
-		else
-		{
-			/* If the data amount is not a multiple of the
-			 * maxpacket size then send a zero length packet.
-			 */
-			req->zero = ((len % TMC_BULK_ENDPOINT_SIZE) == 0);
-		}
-
-		/* Don't leave irqs off while doing memory copies */
-		spin_unlock_irqrestore(&tmc->lock, flags);
-
-		if(copy_from_user(req->buf, buf, size)) {
-			tmc->tx_pending = false;
-			mutex_unlock(&tmc->lock_tmc_io);
-			return bytes_copied;
-		}
-
-		bytes_copied += size;
-		len -= size;
-		buf += size;
-		tmc->current_tx_bytes -= size;
-
-		spin_lock_irqsave(&tmc->lock, flags);
-
-		/* here, we unlock, and only unlock, to avoid deadlock. */
-		spin_unlock(&tmc->lock);
-		tmc->previous_bulk_in_tag = tmc->header.bTag;
-		value = usb_ep_queue(tmc->bulk_in_ep, req, GFP_ATOMIC);
-		spin_lock(&tmc->lock);
-		if (value) {
-			tmc->tx_pending = false;
-			tmc->bulk_in_queued = false;
-			spin_unlock_irqrestore(&tmc->lock, flags);
-			mutex_unlock(&tmc->lock_tmc_io);
-			return -EAGAIN;
-		}
-		else {
-			tmc->tx_pending = true;
-			tmc->bulk_in_queued = true;
-		}
-	}
-
-	spin_unlock_irqrestore(&tmc->lock, flags);
-	mutex_unlock(&tmc->lock_tmc_io);
-
-	if (bytes_copied)
-		return bytes_copied;
-	else
-		return -EAGAIN;
-#else
 	ssize_t bytes_copied = 0;
 	unsigned long flags = 0;
 	struct usb_request *req = NULL;
-	int error = 0;
 	bool send_term_char = false;
 
 	dev_dbg(&tmc->dev, "%s\n", __func__);
-	dev_dbg(&tmc->dev, "%s\t\tlen: %lu\n", buf, len);
 
 	if (len == 0)
 	{
@@ -820,39 +710,37 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 
 	do
 	{
+		size_t adjustment = 0;
 		uint8_t *response_ptr = req->buf;
 		size_t room_left = TMC_BULK_ENDPOINT_SIZE;
 		size_t write_count = 0;
-		size_t adjustment = 0;
 
 		if (header_required)
 		{
-			dev_dbg(&tmc->dev, "Sending header\n");
 			struct tmc_header response_header;
 			memset(&response_header, 0, sizeof(struct tmc_header));
 
 			response_header.MsgID = TMC_DEV_DEP_MSG_IN;
-			response_header.TermChar = 0;
 			response_header.bTag = tmc->header.bTag;
 			response_header.bTagInverse = tmc->header.bTagInverse;
-			response_header.TransferSize = (tmc->header.bmTransferAttributes & 2) ? len + 1 : len;
-			response_header.bmTransferAttributes |= 2;
-			if(tmc->header.bmTransferAttributes & 2) {
+			if (tmc->header.bmTransferAttributes & 2)
+			{
+				response_header.TransferSize = len + 1;
 				response_header.TermChar = tmc->header.TermChar;
+				response_header.bmTransferAttributes |= 2;
 			}
 			else {
+				response_header.TransferSize = len;
 				response_header.TermChar = 0;
 			}
 
 			if(tmc->current_tx_bytes_remaining % 4)
 			{
-				adjustment = (4 - tmc->current_tx_bytes_remaining % 4);
+				adjustment = 4 - (tmc->current_tx_bytes_remaining % 4);
 				tmc->current_tx_bytes_remaining += adjustment;
-				if (tmc->current_tx_bytes_remaining <= TMC_BULK_ENDPOINT_SIZE)
-				{
-					response_header.bmTransferAttributes |= 1; // EOM
-				}
 			}
+
+			response_header.bmTransferAttributes |= 1; // EOM
 
 			memcpy(response_ptr, &response_header, TMC_HEADER_SIZE);
 
@@ -861,7 +749,6 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 			tmc->current_tx_bytes_remaining -= TMC_HEADER_SIZE;
 			room_left -= TMC_HEADER_SIZE;
 			header_required = false;
-			dev_dbg(&tmc->dev, "copied header to req->buf\n");
 		}
 
 		size_t copy_count = room_left;
@@ -877,8 +764,6 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 			mutex_unlock(&tmc->lock_tmc_io);
 			return -EIO;
 		}
-
-		dev_dbg(&tmc->dev, "%s\n", (uint8_t *)req->buf + TMC_HEADER_SIZE);
 
 		bytes_copied += copy_count;
 		tmc->current_tx_bytes_remaining -= copy_count;
@@ -897,6 +782,11 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 			{
 				// Need to send another transaction with the termchar
 				send_term_char = true;
+			}
+
+			if (adjustment == 0)
+			{
+				write_count += 1;
 			}
 		}
 
@@ -921,14 +811,14 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		/* here, we unlock, and only unlock, to avoid deadlock. */
 		spin_unlock(&tmc->lock);
 		tmc->previous_bulk_in_tag = tmc->header.bTag;
-		error = usb_ep_queue(tmc->bulk_in_ep, req, GFP_ATOMIC);
+		int error = usb_ep_queue(tmc->bulk_in_ep, req, GFP_ATOMIC);
 		spin_lock(&tmc->lock);
 		if (error) {
 			tmc->tx_pending = false;
 			tmc->bulk_in_queued = false;
 			spin_unlock_irqrestore(&tmc->lock, flags);
 			mutex_unlock(&tmc->lock_tmc_io);
-			return -EAGAIN;
+			return -EIO;
 		}
 		else {
 			tmc->tx_pending = true;
@@ -944,9 +834,29 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 	if (send_term_char)
 	{
 		// Need to send a term char as its own transfer
+		req = tmc->bulk_in_req;
+		req->complete = tmc_function_bulk_in_req_complete;
+		((uint8_t *)req->buf)[0] = tmc->termchar;
+		req->length = 1;
 
-		// req = tmc->bulk_in_req;
-		// req->complete = tmc_function_bulk_in_req_complete;
+		spin_unlock(&tmc->lock);
+		int error = usb_ep_queue(tmc->bulk_in_ep, req, GFP_ATOMIC);
+		spin_lock(&tmc->lock);
+		if (error) {
+			tmc->tx_pending = false;
+			tmc->bulk_in_queued = false;
+			spin_unlock_irqrestore(&tmc->lock, flags);
+			mutex_unlock(&tmc->lock_tmc_io);
+			return -EIO;
+		}
+		else {
+			tmc->tx_pending = true;
+			tmc->bulk_in_queued = true;
+		}
+
+		spin_unlock_irqrestore(&tmc->lock, flags);
+		wait_event_interruptible(tmc->tx_wait, (false == tmc->tx_pending)); // @suppress("Type cannot be resolved")
+		spin_lock_irqsave(&tmc->lock, flags);
 	}
 
 	// -- WRITE CODE END
@@ -955,7 +865,6 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 	mutex_unlock(&tmc->lock_tmc_io);
 
 	return bytes_copied;
-#endif // WRITE_LARGE_BUFFERS
 }
 
 static __poll_t tmc_function_fops_poll(struct file *file, struct poll_table_struct *wait)
@@ -1017,7 +926,7 @@ static long tmc_gadget_function_fops_ioctl(struct file *file, unsigned int cmd, 
 		break;
 	}
 	spin_unlock_irqrestore(&tmc->lock, flags);
-	return 0;
+	return ret;
 }
 
 static int tmc_function_fops_release(struct inode *inode, struct file *file)
@@ -1069,7 +978,6 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	struct f_tmc_opts *opts;
 	struct usb_ep *ep;
 	struct tmc_device *tmc = func_to_tmc(f);
-	int ret = -EINVAL;
 
 	dev_dbg(&tmc->dev, "%s\n", __func__);
 
@@ -1090,7 +998,7 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	tmc->capabilities.bmDeviceCapabilities488 = opts->bmDeviceCapabilities488;
 
 	/* Allocate interface IDs. */
-	ret = usb_interface_id(c, f);
+	int ret = usb_interface_id(c, f);
 	if(ret < 0) {
 		dev_err(&tmc->dev, "could not allocate interface ID's\n");
 	}
@@ -1436,7 +1344,6 @@ static int tmc_function_ctrl_req_check_clear_status(struct usb_composite_dev *cd
 
 static int tmc_function_ctrl_req_get_capabilities(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	int ret = -EOPNOTSUPP;
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
 	struct capability_response response;
 
@@ -1455,7 +1362,7 @@ static int tmc_function_ctrl_req_get_capabilities(struct usb_composite_dev *cdev
 	if(w_length != sizeof(struct capability_response)) {
 		response.USBTMC_status = USBTMC_STATUS_FAILED;
 	}
-	ret = min_t(unsigned short, w_length, sizeof(struct capability_response));
+	int ret = min_t(unsigned short, w_length, sizeof(struct capability_response));
 	memcpy(req->buf, (void *) &response, ret);
 
 	req->zero = 0;
@@ -1489,7 +1396,7 @@ static int tmc_function_ctrl_req_indicator_pulse(struct usb_composite_dev *cdev,
 static int tmc_function_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	struct status_byte_response response;
-	int ret = -EOPNOTSUPP;
+	int ret = 0;
 	uint16_t w_value = le16_to_cpu(ctrl->wValue);
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
 
@@ -1998,6 +1905,7 @@ static struct configfs_item_operations tmc_item_ops = {
 };
 
 /* ConfigFS USB TMC Capabilities */
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bcdUSBTMC_show(struct config_item *item, char *page)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2010,6 +1918,7 @@ static ssize_t f_tmc_bcdUSBTMC_show(struct config_item *item, char *page)
 	return result;
 }
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bcdUSBTMC_store(struct config_item *item, const char *page, size_t len)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2031,6 +1940,7 @@ static ssize_t f_tmc_bcdUSBTMC_store(struct config_item *item, const char *page,
 }
 CONFIGFS_ATTR(f_tmc_, bcdUSBTMC);
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmInterfaceCapabilities_show(struct config_item *item, char *page)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2043,6 +1953,7 @@ static ssize_t f_tmc_bmInterfaceCapabilities_show(struct config_item *item, char
 	return result;
 }
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmInterfaceCapabilities_store(struct config_item *item, const char *page, size_t len)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2064,6 +1975,7 @@ static ssize_t f_tmc_bmInterfaceCapabilities_store(struct config_item *item, con
 }
 CONFIGFS_ATTR(f_tmc_, bmInterfaceCapabilities);
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmDeviceCapabilities_show(struct config_item *item, char *page)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2076,6 +1988,7 @@ static ssize_t f_tmc_bmDeviceCapabilities_show(struct config_item *item, char *p
 	return result;
 }
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmDeviceCapabilities_store(struct config_item *item, const char *page, size_t len)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2097,6 +2010,7 @@ static ssize_t f_tmc_bmDeviceCapabilities_store(struct config_item *item, const 
 }
 CONFIGFS_ATTR(f_tmc_, bmDeviceCapabilities);
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bcdUSB488_show(struct config_item *item, char *page)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2109,6 +2023,7 @@ static ssize_t f_tmc_bcdUSB488_show(struct config_item *item, char *page)
 	return result;
 }
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bcdUSB488_store(struct config_item *item, const char *page, size_t len)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2130,6 +2045,7 @@ static ssize_t f_tmc_bcdUSB488_store(struct config_item *item, const char *page,
 }
 CONFIGFS_ATTR(f_tmc_, bcdUSB488);
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmInterfaceCapabilities488_show(struct config_item *item, char *page)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2142,6 +2058,7 @@ static ssize_t f_tmc_bmInterfaceCapabilities488_show(struct config_item *item, c
 	return result;
 }
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmInterfaceCapabilities488_store(struct config_item *item, const char *page, size_t len)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2163,6 +2080,7 @@ static ssize_t f_tmc_bmInterfaceCapabilities488_store(struct config_item *item, 
 }
 CONFIGFS_ATTR(f_tmc_, bmInterfaceCapabilities488);
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmDeviceCapabilities488_show(struct config_item *item, char *page)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2175,6 +2093,7 @@ static ssize_t f_tmc_bmDeviceCapabilities488_show(struct config_item *item, char
 	return result;
 }
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_bmDeviceCapabilities488_store(struct config_item *item, const char *page, size_t len)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2196,6 +2115,7 @@ static ssize_t f_tmc_bmDeviceCapabilities488_store(struct config_item *item, con
 }
 CONFIGFS_ATTR(f_tmc_, bmDeviceCapabilities488);
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_ren_show(struct config_item *item, char *page)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2208,6 +2128,7 @@ static ssize_t f_tmc_ren_show(struct config_item *item, char *page)
 	return result;
 }
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_ren_store(struct config_item *item, const char *page, size_t len)
 {
 	struct f_tmc_opts *opts = to_f_tmc_opts(item);
@@ -2230,6 +2151,7 @@ static ssize_t f_tmc_ren_store(struct config_item *item, const char *page, size_
 
 CONFIGFS_ATTR(f_tmc_, ren);
 
+//cppcheck-suppress unusedFunction
 static ssize_t f_tmc_interface_show(struct config_item *item, char *page)
 {
 	return sprintf(page, "%u\n", to_f_tmc_opts(item)->interface);
