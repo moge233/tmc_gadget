@@ -709,11 +709,8 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 			size = len;
 
 		req = tmc->bulk_in_req;
-
 		req->complete = tmc_function_bulk_in_req_complete;
 		req->length = size;
-		tmc->current_tx_msg_bytes = len;
-		tmc->current_remaining_tx_msg_bytes = len;
 		tmc->current_tx_bytes = size;
 
 		/* Check if we need to send a zero length packet. */
@@ -743,13 +740,6 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		len -= size;
 		buf += size;
 		tmc->current_tx_bytes -= size;
-		tmc->current_remaining_tx_msg_bytes -= size;
-
-		if (tmc->current_remaining_tx_msg_bytes == 0)
-		{
-			dev_dbg(&tmc->dev, "---- len == 0; termchar (%u)\n", tmc->termchar);
-			//*((uint8_t *)req->buf + tmc->current_msg_bytes) = tmc->termchar;
-		}
 
 		spin_lock_irqsave(&tmc->lock, flags);
 
