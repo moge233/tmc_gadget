@@ -348,7 +348,7 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 						break;
 					}
 
-					tmc->header_required = 0;
+					tmc->rx_header_required = 0;
 					memcpy(&tmc->header, req->buf, TMC_HEADER_SIZE);
 					dev_dbg(&tmc->dev, "--- tmc->header.bmTransferAttributes & EOM: %d\n",
 							tmc->header.bmTransferAttributes & TMC_XFER_END_OF_MSG);
@@ -419,13 +419,13 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 			}
 			break;
 		case -ECONNRESET:
-			tmc->header_required = true;
+			tmc->rx_header_required = true;
 			tmc->rx_complete = false;
 			tmc->connection_reset = true;
 			dev_err(&tmc->dev, "---- case ECONNRESET, status: %d\n", status);
 			break;
 		case -ESHUTDOWN:
-			tmc->header_required = true;
+			tmc->rx_header_required = true;
 			tmc->rx_complete = false;
 			tmc->connection_reset = true;
 			dev_err(&tmc->dev, "---- case ESHUTDOWN, status: %d\n", status);
@@ -581,7 +581,7 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 
 	/* We have data to return then copy it to the caller's buffer.*/
 	while((current_rx_bytes || tmc->rx_complete) && len) {
-		if(!tmc->header_required && (tmc->header.MsgID != 0)) {
+		if(!tmc->rx_header_required && (tmc->header.MsgID != 0)) {
 			/*
 			 * Mark the message as currently being processed
 			 */
@@ -617,7 +617,7 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 		tmc->current_msg_bytes -= bytes_copied;
 		if(!tmc->current_msg_bytes)
 		{
-			tmc->header_required = true;
+			tmc->rx_header_required = true;
 		}
 
 		spin_lock_irqsave(&tmc->lock, flags);
@@ -663,6 +663,7 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf, size_t len, loff_t *offset) // @suppress("Type cannot be resolved")
 {
 	struct tmc_device *tmc = file->private_data;
+#ifndef WRITE_LARGE_BUFFERS
 	unsigned long flags;
 	size_t size;
 	size_t bytes_copied = 0;
@@ -768,6 +769,193 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		return bytes_copied;
 	else
 		return -EAGAIN;
+#else
+	ssize_t bytes_copied = 0;
+	unsigned long flags = 0;
+	struct usb_request *req = NULL;
+	int error = 0;
+	bool send_term_char = false;
+
+	dev_dbg(&tmc->dev, "%s\n", __func__);
+	dev_dbg(&tmc->dev, "%s\t\tlen: %lu\n", buf, len);
+
+	if (len == 0)
+	{
+		return -EINVAL;
+	}
+
+	if (tmc->is_shutdown)
+	{
+		return -ESHUTDOWN;
+	}
+
+	mutex_lock(&tmc->lock_tmc_io);
+	spin_lock_irqsave(&tmc->lock, flags);
+
+	// --- WRITE CODE START
+
+	if(tmc->tx_pending) {
+		/* Turn interrupts back on before sleeping. */
+		spin_unlock_irqrestore(&tmc->lock, flags);
+
+		/*
+		 * If write buffers are available check if this is
+		 * a NON-Blocking call or not.
+		 */
+		if (file->f_flags & (O_NONBLOCK | O_NDELAY)) {
+			mutex_unlock(&tmc->lock_tmc_io);
+			return -EAGAIN;
+		}
+
+		wait_event_interruptible(tmc->tx_wait, (false == tmc->tx_pending)); // @suppress("Type cannot be resolved")
+		spin_lock_irqsave(&tmc->lock, flags);
+	}
+
+	bool header_required = true;
+	tmc->current_tx_bytes_remaining = TMC_HEADER_SIZE + len;
+	tmc->current_tx_buf = (uint8_t *)buf;
+
+	req = tmc->bulk_in_req;
+	req->complete = tmc_function_bulk_in_req_complete;
+
+	do
+	{
+		uint8_t *response_ptr = req->buf;
+		size_t room_left = TMC_BULK_ENDPOINT_SIZE;
+		size_t write_count = 0;
+		size_t adjustment = 0;
+
+		if (header_required)
+		{
+			dev_dbg(&tmc->dev, "Sending header\n");
+			struct tmc_header response_header;
+			memset(&response_header, 0, sizeof(struct tmc_header));
+
+			response_header.MsgID = TMC_DEV_DEP_MSG_IN;
+			response_header.TermChar = 0;
+			response_header.bTag = tmc->header.bTag;
+			response_header.bTagInverse = tmc->header.bTagInverse;
+			response_header.TransferSize = (tmc->header.bmTransferAttributes & 2) ? len + 1 : len;
+			response_header.bmTransferAttributes |= 2;
+			if(tmc->header.bmTransferAttributes & 2) {
+				response_header.TermChar = tmc->header.TermChar;
+			}
+			else {
+				response_header.TermChar = 0;
+			}
+
+			if(tmc->current_tx_bytes_remaining % 4)
+			{
+				adjustment = (4 - tmc->current_tx_bytes_remaining % 4);
+				tmc->current_tx_bytes_remaining += adjustment;
+				if (tmc->current_tx_bytes_remaining <= TMC_BULK_ENDPOINT_SIZE)
+				{
+					response_header.bmTransferAttributes |= 1; // EOM
+				}
+			}
+
+			memcpy(response_ptr, &response_header, TMC_HEADER_SIZE);
+
+			response_ptr += TMC_HEADER_SIZE;
+			write_count += TMC_HEADER_SIZE;
+			tmc->current_tx_bytes_remaining -= TMC_HEADER_SIZE;
+			room_left -= TMC_HEADER_SIZE;
+			header_required = false;
+			dev_dbg(&tmc->dev, "copied header to req->buf\n");
+		}
+
+		size_t copy_count = room_left;
+		if(tmc->current_tx_bytes_remaining <= copy_count) {
+			copy_count = tmc->current_tx_bytes_remaining;
+		}
+
+		/* Don't leave irqs off while doing memory copies */
+		spin_unlock_irqrestore(&tmc->lock, flags);
+
+		if(copy_from_user(response_ptr, tmc->current_tx_buf, copy_count)) {
+			tmc->tx_pending = false;
+			mutex_unlock(&tmc->lock_tmc_io);
+			return -EIO;
+		}
+
+		dev_dbg(&tmc->dev, "%s\n", (uint8_t *)req->buf + TMC_HEADER_SIZE);
+
+		bytes_copied += copy_count;
+		tmc->current_tx_bytes_remaining -= copy_count;
+		tmc->current_tx_buf += copy_count;
+		response_ptr += copy_count;
+		write_count += copy_count;
+		room_left -= copy_count;
+
+		if ((tmc->current_tx_bytes_remaining == 0) && (tmc->header.bmTransferAttributes & 2))
+		{
+			if (room_left)
+			{
+				*(response_ptr - adjustment) = (tmc->header.TermChar);
+			}
+			else
+			{
+				// Need to send another transaction with the termchar
+				send_term_char = true;
+			}
+		}
+
+		req->length = write_count;
+
+		/* Check if we need to send a zero length packet. */
+		if (write_count < TMC_BULK_ENDPOINT_SIZE)
+		{
+			/* They will be more TX requests so no yet. */
+			req->zero = 0;
+		}
+		else
+		{
+			/* If the data amount is not a multiple of the
+			 * maxpacket size then send a zero length packet.
+			 */
+			req->zero = ((write_count % TMC_BULK_ENDPOINT_SIZE) == 0);
+		}
+
+		spin_lock_irqsave(&tmc->lock, flags);
+
+		/* here, we unlock, and only unlock, to avoid deadlock. */
+		spin_unlock(&tmc->lock);
+		tmc->previous_bulk_in_tag = tmc->header.bTag;
+		error = usb_ep_queue(tmc->bulk_in_ep, req, GFP_ATOMIC);
+		spin_lock(&tmc->lock);
+		if (error) {
+			tmc->tx_pending = false;
+			tmc->bulk_in_queued = false;
+			spin_unlock_irqrestore(&tmc->lock, flags);
+			mutex_unlock(&tmc->lock_tmc_io);
+			return -EAGAIN;
+		}
+		else {
+			tmc->tx_pending = true;
+			tmc->bulk_in_queued = true;
+		}
+
+		spin_unlock_irqrestore(&tmc->lock, flags);
+		wait_event_interruptible(tmc->tx_wait, (false == tmc->tx_pending)); // @suppress("Type cannot be resolved")
+		spin_lock_irqsave(&tmc->lock, flags);
+
+	} while (tmc->current_tx_bytes_remaining);
+
+	if (send_term_char)
+	{
+		// Need to send a term char as its own transfer
+
+		// req = tmc->bulk_in_req;
+		// req->complete = tmc_function_bulk_in_req_complete;
+	}
+
+	// -- WRITE CODE END
+
+	spin_unlock_irqrestore(&tmc->lock, flags);
+	mutex_unlock(&tmc->lock_tmc_io);
+
+	return bytes_copied;
+#endif // WRITE_LARGE_BUFFERS
 }
 
 static __poll_t tmc_function_fops_poll(struct file *file, struct poll_table_struct *wait)
@@ -973,7 +1161,7 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 	}
 
 	memset(&tmc->header, 0, TMC_HEADER_SIZE);
-	tmc->header_required = true;
+	tmc->rx_header_required = true;
 	tmc->tx_header_required = true;
 
 	/* Create the char device */
@@ -1477,7 +1665,7 @@ static int tmc_function_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev
 			tmc->current_tx_bytes = 0;
 			tmc->tx_pending = false;
 			tmc->bulk_in_queued = false;
-			tmc->header_required = true;
+			tmc->rx_header_required = true;
 			tmc->abort_bulk_in_complete = true;
 		}
 	}
@@ -1545,7 +1733,7 @@ static int tmc_function_ctrl_req_initiate_abort_bulk_out(struct usb_composite_de
 
 	dev_dbg(&tmc->dev, "%s\n", __func__);
 
-	tmc->header_required = true;
+	tmc->rx_header_required = true;
 	tmc->current_msg_bytes = 0;
 	tmc->current_rx_bytes = 0;
 	tmc->current_rx_buf = NULL;

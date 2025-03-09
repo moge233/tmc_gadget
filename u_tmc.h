@@ -16,6 +16,13 @@
 #include <linux/device.h>
 #include <linux/types.h>
 
+
+/*-------------------------------------------------------------------------
+ * Debug symbols
+ *-------------------------------------------------------------------------*/
+#define WRITE_LARGE_BUFFERS	1
+
+
 #define TMC_INTF						0
 #define TMC_NUM_ENDPOINTS				3
 #define TMC_488_SUBCLASS				3
@@ -143,14 +150,19 @@ struct tmc_device {
 	 * TMS message structure and message status members
 	 */
 	struct tmc_header header;
-	bool header_required;
+	bool rx_header_required;
 	bool tx_header_required;
 	size_t current_msg_bytes;				/* Total length of the current TMC message */
 	size_t current_tx_msg_bytes;			/* Total length of the current TX TMC message */
 	size_t current_remaining_tx_msg_bytes;	/* Total remaining length of the current TX TMC message */
+#ifdef WRITE_LARGE_BUFFERS
+	size_t current_tx_bytes_remaining;		/* Remaining bytes in a TX transfer */
+	uint8_t *current_tx_buf;				/* Start of the current TX buffer */
+	uint8_t *current_tx_ptr;				/* Current pointer to TX buffer */
+#endif
 	struct usb_request *current_rx_req;
 	size_t current_rx_bytes;				/* Current available RX bytes to read */
-	uint8_t *current_rx_buf;
+	uint8_t *current_rx_buf;				/* Start of the current RX buffer */
 	size_t current_tx_bytes;				/* Current available TX bytes to send */
 	uint8_t previous_bulk_out_tag;			/* The last bulk OUT bTag */
 	uint8_t previous_bulk_in_tag;			/* The last bulk IN bTag */
