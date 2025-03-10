@@ -347,10 +347,8 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 						break;
 					}
 
-					tmc->rx_header_required = 0;
+					tmc->rx_header_required = false;
 					memcpy(&tmc->header, req->buf, TMC_HEADER_SIZE);
-					dev_dbg(&tmc->dev, "--- tmc->header.bmTransferAttributes & EOM: %d\n",
-							tmc->header.bmTransferAttributes & TMC_XFER_END_OF_MSG);
 
 					/*
 					 * Check the MsgID value to make sure it is recognized and supported
@@ -381,15 +379,7 @@ static void tmc_function_bulk_out_req_complete(struct usb_ep *ep, struct usb_req
 					/*
 					 * Check the transfer attributes for an End of Message character or Termination Character
 					 */
-					if((tmc->header.MsgID == TMC_DEV_DEP_MSG_OUT) ||
-							(tmc->header.MsgID == TMC_VENDOR_SPECIFIC_OUT))
-					{
-						if(tmc->header.bmTransferAttributes & TMC_XFER_END_OF_MSG)
-						{
-							dev_dbg(&tmc->dev, "--- tmc->header EOM set\n");
-						}
-					}
-					else if ((tmc->header.MsgID == TMC_REQUEST_DEV_DEP_MSG_IN) ||
+					if ((tmc->header.MsgID == TMC_REQUEST_DEV_DEP_MSG_IN) ||
 							(tmc->header.MsgID == TMC_REQUEST_VENDOR_SPECIFIC_IN))
 					{
 						if(tmc->header.bmTransferAttributes & TMC_XFER_TERM_CHAR_ENABLED)
@@ -662,10 +652,7 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf, size_t len, loff_t *offset) // @suppress("Type cannot be resolved")
 {
 	struct tmc_device *tmc = file->private_data;
-	ssize_t bytes_copied = 0;
 	unsigned long flags = 0;
-	struct usb_request *req = NULL;
-	bool send_term_char = false;
 
 	dev_dbg(&tmc->dev, "%s\n", __func__);
 
@@ -699,7 +686,11 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		spin_lock_irqsave(&tmc->lock, flags);
 	}
 
+	ssize_t bytes_copied = 0;
+	struct usb_request *req = NULL;
+	bool send_term_char = false;
 	bool header_required = true;
+
 	tmc->current_tx_bytes_remaining = TMC_HEADER_SIZE + len;
 	tmc->current_tx_buf = (uint8_t *)buf;
 
@@ -1065,7 +1056,6 @@ static int tmc_function_bind(struct usb_configuration *c, struct usb_function *f
 
 	memset(&tmc->header, 0, TMC_HEADER_SIZE);
 	tmc->rx_header_required = true;
-	tmc->tx_header_required = true;
 
 	/* Create the char device */
 	cdev_init(&tmc->cdev, &f_tmc_fops);
@@ -1639,7 +1629,6 @@ static int tmc_function_ctrl_req_initiate_abort_bulk_out(struct usb_composite_de
 	tmc->current_msg_bytes = 0;
 	tmc->current_rx_bytes = 0;
 	tmc->current_rx_buf = NULL;
-	tmc->current_rx_req = NULL;
 
 	if(current_tag == bulk_out_tag)
 	{
@@ -1873,7 +1862,6 @@ static struct usb_function *tmc_alloc_func(struct usb_function_instance *fi)
 	init_waitqueue_head(&tmc->rx_wait);
 	init_waitqueue_head(&tmc->tx_wait);
 
-	tmc->current_rx_req = NULL;
 	tmc->current_rx_bytes = 0;
 	tmc->current_rx_buf = NULL;
 	tmc->current_tx_bytes = 0;
