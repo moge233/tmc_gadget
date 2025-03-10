@@ -682,8 +682,6 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 	mutex_lock(&tmc->lock_tmc_io);
 	spin_lock_irqsave(&tmc->lock, flags);
 
-	// --- WRITE CODE START
-
 	if(tmc->tx_pending) {
 		/* Turn interrupts back on before sleeping. */
 		spin_unlock_irqrestore(&tmc->lock, flags);
@@ -784,7 +782,7 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 				send_term_char = true;
 			}
 
-			if (adjustment == 0)
+			if ((adjustment == 0) && room_left)
 			{
 				write_count += 1;
 			}
@@ -834,9 +832,8 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 	if (send_term_char)
 	{
 		// Need to send a term char as its own transfer
-		req = tmc->bulk_in_req;
-		req->complete = tmc_function_bulk_in_req_complete;
-		((uint8_t *)req->buf)[0] = tmc->termchar;
+		uint8_t termchar_buffer[] = { tmc->termchar };
+		memcpy((uint8_t *)req->buf, termchar_buffer, 1);
 		req->length = 1;
 
 		spin_unlock(&tmc->lock);
@@ -858,8 +855,6 @@ static ssize_t tmc_function_fops_write(struct file *file, const char __user *buf
 		wait_event_interruptible(tmc->tx_wait, (false == tmc->tx_pending)); // @suppress("Type cannot be resolved")
 		spin_lock_irqsave(&tmc->lock, flags);
 	}
-
-	// -- WRITE CODE END
 
 	spin_unlock_irqrestore(&tmc->lock, flags);
 	mutex_unlock(&tmc->lock_tmc_io);
