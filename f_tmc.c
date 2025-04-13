@@ -251,6 +251,17 @@ static int tmc_ioctl_read_stb(struct tmc_device *tmc, void __user *arg)
 	return 0;
 }
 
+static int tmc_ioctl_get_header(struct tmc_device *tmc, void __user *arg)
+{
+	if (access_ok(arg, sizeof(struct usbtmc_header)))
+	{
+		dev_dbg(&tmc->dev, "%s: copy header to user space\n", __func__);
+		return copy_to_user(arg, &tmc->header, sizeof(struct usbtmc_header));
+	}
+
+	return -EFAULT;
+}
+
 static int tmc_rl_state_machine(struct tmc_device *tmc, enum tmc_rl_state_machine_event event)
 {
 	switch(tmc->rlstate) {
@@ -557,13 +568,6 @@ static ssize_t tmc_function_fops_read(struct file * file, char __user *buf, size
 
 	/* We have data to return then copy it to the caller's buffer.*/
 	while((current_rx_bytes || tmc->rx_complete) && len) {
-		if(!tmc->rx_header_required && (tmc->header.MsgID != 0)) {
-			/*
-			 * Mark the message as currently being processed
-			 */
-			tmc->header.MsgID = 0;
-		}
-
 		if(current_rx_bytes == 0) {
 			req = tmc->bulk_out_req;
 
@@ -889,6 +893,9 @@ static long tmc_gadget_function_fops_ioctl(struct file *file, unsigned int cmd, 
 	case USBTMC488_IOCTL_WRITE_STB:
 	 	ret = (long) tmc_ioctl_write_stb(tmc, (void __user *)arg);
 	 	break;
+	case USBTMC_IOCTL_GET_HEADER:
+		ret = (long) tmc_ioctl_get_header(tmc, (void __user *)arg);
+		break;
 	default:
 		break;
 	}
