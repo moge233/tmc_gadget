@@ -447,9 +447,6 @@ static int tmc_gadget_fops_open(struct inode *inode, struct file *file)
 
 static int tmc_gadget_fops_release(struct inode *inode, struct file *file)
 {
-	struct tmc_device *tmc;
-
-	tmc = container_of(inode->i_cdev, struct tmc_device, cdev);
 	file->private_data = NULL;
 
 	return 0;
@@ -1136,11 +1133,8 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 		if (!ret)
 		{
 			tmc->intr_in_queued = true;
-		}
 
-		// Handle the control endpoint now
-		if (!ret)
-		{
+			// Handle the control endpoint now
 			struct status_response status;
 			status.USBTMC_status = USBTMC_STATUS_SUCCESS;
 			status.tag = (uint8_t) w_value;
