@@ -172,9 +172,9 @@ static int tmc_gadget_ioctl_read_stb(struct tmc_device *tmc, void __user *arg)
 
 static int tmc_gadget_ioctl_get_header(struct tmc_device *tmc, void __user *arg)
 {
-	if (access_ok(arg, sizeof(struct usbtmc_header)))
+	if (access_ok(arg, GADGET_TMC_HEADER_SIZE))
 	{
-		return copy_to_user(arg, &tmc->current_header, sizeof(struct usbtmc_header));
+		return copy_to_user(arg, &tmc->current_header, GADGET_TMC_HEADER_SIZE);
 	}
 
 	return -EFAULT;
