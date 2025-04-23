@@ -519,7 +519,7 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 			response_header.MsgID = TMC_DEV_DEP_MSG_IN;
 			response_header.bTag = tmc->current_header.bTag;
 			response_header.bTagInverse = tmc->current_header.bTagInverse;
-			if (tmc->current_header.bmTransferAttributes & 2)
+			if (tmc->current_header.bmTransferAttributes & GADGET_TMC_XFER_ATTRS_TERM_CHAR_ENABLED)
 			{
 				response_header.TransferSize = len + 1;
 				response_header.TermChar = tmc->current_header.TermChar;
@@ -571,7 +571,8 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 		write_count += copy_count;
 		room_left -= copy_count;
 
-		if ((tmc->current_tx_bytes_remaining == 0) && (tmc->current_header.bmTransferAttributes & 2))
+		if ((tmc->current_tx_bytes_remaining == 0) &&
+				(tmc->current_header.bmTransferAttributes & GADGET_TMC_XFER_ATTRS_TERM_CHAR_ENABLED))
 		{
 			if (room_left)
 			{
