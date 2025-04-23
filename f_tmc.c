@@ -9,8 +9,7 @@
 #include <linux/configfs.h>
 #include <linux/fs.h>
 #include <linux/poll.h>
-#include <uapi/linux/usb/tmc.h>
-#include <linux/types.h>
+#include <linux/usb/g_tmc.h>
 
 #include "u_tmc.h"
 
@@ -846,19 +845,19 @@ static long tmc_gadget_fops_ioctl(struct file *file, unsigned int cmd, unsigned 
 	spin_lock_irqsave(&tmc->lock, flags);
 	switch(cmd)
 	{
-		case USBTMC_IOCTL_ABORT_BULK_OUT:
+		case GADGET_TMC_IOCTL_ABORT_BULK_OUT:
 			usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req);
 			break;
-		case USBTMC_IOCTL_ABORT_BULK_IN:
+		case GADGET_TMC_IOCTL_ABORT_BULK_IN:
 			usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_out_req);
 			break;
-		case USBTMC488_IOCTL_READ_STB:
+		case GADGET_TMC488_IOCTL_GET_STB:
 			ret = (long) tmc_gadget_ioctl_read_stb(tmc, (void __user *)arg);
 			break;
-		case USBTMC488_IOCTL_WRITE_STB:
+		case GADGET_TMC488_IOCTL_SET_STB:
 			ret = (long) tmc_gadget_ioctl_write_stb(tmc, (void __user *)arg);
 			break;
-		case USBTMC_IOCTL_GET_HEADER:
+		case GADGET_TMC_IOCTL_GET_HEADER:
 			ret = (long) tmc_gadget_ioctl_get_header(tmc, (void __user *)arg);
 			break;
 		default:
@@ -972,7 +971,7 @@ static int tmc_gadget_ctrl_req_initiate_clear(struct usb_composite_dev *cdev, st
 {
 	int ret = 0;
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
-	uint8_t response[] = { USBTMC_STATUS_SUCCESS };
+	uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS };
 
 	tmc_gadget_rl_state_machine(tmc, TMC_EVENT_INITIATE_CLEAR);
 
@@ -1003,7 +1002,7 @@ static int tmc_gadget_ctrl_req_initiate_clear(struct usb_composite_dev *cdev, st
 	if (ret)
 	{
 		dev_err(&tmc->dev, "error halting bulk out endpoint (%d)\n", ret);
-		response[0] = USBTMC_STATUS_FAILED;
+		response[0] = GADGET_TMC_STATUS_FAILED;
 		memcpy(req->buf, (void *) &response, 1);
 		req->zero = 0;
 		req->length = w_length;
@@ -1051,7 +1050,7 @@ static int tmc_gadget_ctrl_req_check_clear_status(struct usb_composite_dev *cdev
 	// TODO: handle the case where the bulk in FIFO cannot be emptied
 	int ret = 0;
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
-	uint8_t response[] = { USBTMC_STATUS_SUCCESS, 0 };
+	uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS, 0 };
 
 	memcpy(req->buf, (void *) &response, w_length);
 	req->zero = 0;
@@ -1074,10 +1073,10 @@ static int tmc_gadget_ctrl_req_get_capabilities(struct usb_composite_dev *cdev, 
 	response.bmUSB488InterfaceCapabilities = tmc->device_capabilities.bmUSB488InterfaceCapabilities;
 	response.bmUSB488DeviceCapabilities = tmc->device_capabilities.bmUSB488DeviceCapabilities;
 
-	response.USBTMC_status = USBTMC_STATUS_SUCCESS;
+	response.USBTMC_status = GADGET_TMC_STATUS_SUCCESS;
 	if (w_length != sizeof(struct capability_response))
 	{
-		response.USBTMC_status = USBTMC_STATUS_FAILED;
+		response.USBTMC_status = GADGET_TMC_STATUS_FAILED;
 	}
 	int ret = min_t(unsigned short, w_length, sizeof(struct capability_response));
 	memcpy(req->buf, (void *) &response, ret);
@@ -1093,10 +1092,10 @@ static int tmc_gadget_ctrl_req_indicator_pulse(struct usb_composite_dev *cdev, s
 {
 	int ret = 0;
 
-	if (tmc->device_capabilities.bmUSBTMCInterfaceCapabilities & USBTMC488_CAPABILITY_488_DOT_2)
+	if (tmc->device_capabilities.bmUSBTMCInterfaceCapabilities & GADGET_TMC_CAPABILITY_INDICATOR_PULSE)
 	{
 		uint16_t w_length = le16_to_cpu(ctrl->wLength);
-		uint8_t response[] = { USBTMC_STATUS_SUCCESS };
+		uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS };
 
 		memcpy(req->buf, (void *) &response, w_length);
 		req->zero = 0;
@@ -1119,7 +1118,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 
 	// Attempt to send the status byte via the interrupt endpoint
 	// per USBTMC 4.3.1.2
-	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & USBTMC488_CAPABILITY_488_DOT_2)
+	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & GADGET_TMC488_CAPABILITY_SR1)
 	{
 		// USBTMC/USB488 3.4.2 Table 7
 		response.tag = (uint8_t) (USB_DIR_IN | (0x7F & w_value));
@@ -1141,7 +1140,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 
 			// Handle the control endpoint now
 			struct status_response status;
-			status.USBTMC_status = USBTMC_STATUS_SUCCESS;
+			status.USBTMC_status = GADGET_TMC_STATUS_SUCCESS;
 			status.tag = (uint8_t) w_value;
 			status.status_byte = g_status_byte;
 
@@ -1159,7 +1158,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 		// queue a control endpoint response as shown in Table 12
 		// per USBTMC 4.3.1.1
 		struct status_response status;
-		status.USBTMC_status = USBTMC_STATUS_SUCCESS;
+		status.USBTMC_status = GADGET_TMC_STATUS_SUCCESS;
 		status.tag = (uint8_t) w_value;
 		status.status_byte = g_status_byte;
 
@@ -1176,12 +1175,12 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 
 static int tmc_gadget_ctrl_req_ren_control(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	uint8_t response[] = { USBTMC_STATUS_SUCCESS };
+	uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS };
 	int ret = 0;
 	uint16_t w_value = le16_to_cpu(ctrl->wValue);
 	uint16_t w_length = le16_to_cpu(ctrl->wLength);
 
-	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & USBTMC488_CAPABILITY_REN_CONTROL)
+	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & GADGET_TMC488_CAPABILITY_REN_CONTROL)
 	{
 		g_ren = 0xFF & w_value;
 		memcpy(req->buf, (void *) &response, w_length);
@@ -1201,7 +1200,7 @@ static int tmc_gadget_ctrl_req_goto_local(struct usb_composite_dev *cdev, struct
 {
 	int ret = -EOPNOTSUPP;
 
-	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & USBTMC488_CAPABILITY_REN_CONTROL)
+	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & GADGET_TMC488_CAPABILITY_GOTO_LOCAL)
 	{
 		// TODO:
 	}
@@ -1217,7 +1216,7 @@ static int tmc_gadget_ctrl_req_local_lockout(struct usb_composite_dev *cdev, str
 {
 	int ret = -EOPNOTSUPP;
 
-	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & USBTMC488_CAPABILITY_RL1)
+	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & GADGET_TMC488_CAPABILITY_LOCAL_LOCKOUT)
 	{
 		// TODO:
 	}
@@ -1235,7 +1234,7 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev *
 
 	if (current_tag == bulk_in_tag)
 	{
-		status = USBTMC_STATUS_SUCCESS;
+		status = GADGET_TMC_STATUS_SUCCESS;
 		response[0] = status;
 		response[1] = current_tag;
 
@@ -1277,13 +1276,13 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev *
 	}
 	else if (tmc->bulk_in_queued || (usb_ep_fifo_status(tmc->bulk_out_ep) > 0))
 	{
-		status = USBTMC_STATUS_TRANSFER_NOT_IN_PROGRESS;
+		status = GADGET_TMC_STATUS_TRANSFER_NOT_IN_PROGRESS;
 		response[0] = status;
 		response[1] = current_tag;
 	}
 	else
 	{
-		status = USBTMC_STATUS_FAILED;
+		status = GADGET_TMC_STATUS_FAILED;
 		response[0] = status;
 		response[1] = tmc->previous_bulk_in_tag;
 	}
@@ -1309,7 +1308,7 @@ static int tmc_gadget_ctrl_req_check_abort_bulk_in_status(struct usb_composite_d
 	if (tmc->abort_bulk_in_complete)
 	{
 		tmc->abort_bulk_in_complete = false;
-		response[0] = USBTMC_STATUS_SUCCESS;
+		response[0] = GADGET_TMC_STATUS_SUCCESS;
 		response[4] = cpu_to_le32(0);
 	}
 
@@ -1347,7 +1346,7 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_out(struct usb_composite_dev 
 			dev_err(&tmc->dev, "usb_ep_dequeue failed on tmc->bulk_out_ep with error code %d\n", ret);
 		}
 
-		status = USBTMC_STATUS_SUCCESS;
+		status = GADGET_TMC_STATUS_SUCCESS;
 		response[0] = status;
 		response[1] = current_tag;
 		memcpy(req->buf, (void *) &response, 2);
@@ -1366,7 +1365,7 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_out(struct usb_composite_dev 
 	}
 	else if (usb_ep_fifo_status(tmc->bulk_out_ep) > 0)
 	{
-		status = USBTMC_STATUS_TRANSFER_NOT_IN_PROGRESS;
+		status = GADGET_TMC_STATUS_TRANSFER_NOT_IN_PROGRESS;
 		response[0] = status;
 		response[1] = current_tag;
 		memcpy(req->buf, (void *) &response, 2);
@@ -1376,7 +1375,7 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_out(struct usb_composite_dev 
 	}
 	else
 	{
-		status = USBTMC_STATUS_FAILED;
+		status = GADGET_TMC_STATUS_FAILED;
 		response[0] = status;
 		response[1] = tmc->previous_bulk_out_tag;
 		memcpy(req->buf, (void *) &response, 2);
@@ -1392,7 +1391,7 @@ static int tmc_gadget_ctrl_req_check_abort_bulk_out_status(struct usb_composite_
 	int ret = 0;
 	uint8_t response[8] = { 0 };
 
-	response[0] = USBTMC_STATUS_SUCCESS;
+	response[0] = GADGET_TMC_STATUS_SUCCESS;
 	response[4] = cpu_to_le32(0);
 	memcpy(req->buf, (void *) &response, 2);
 	req->zero = 0;
@@ -1662,41 +1661,41 @@ static int tmc_gadget_function_setup(struct usb_function *f, const struct usb_ct
 
 	switch (ctrl->bRequest)
 	{
-		case USBTMC_REQUEST_INITIATE_CLEAR:
-			value = tmc_gadget_ctrl_req_initiate_clear(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC_REQUEST_CHECK_CLEAR_STATUS:
-			value = tmc_gadget_ctrl_req_check_clear_status(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC_REQUEST_GET_CAPABILITIES:
-			value = tmc_gadget_ctrl_req_get_capabilities(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC_REQUEST_INDICATOR_PULSE:
-			value = tmc_gadget_ctrl_req_indicator_pulse(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC488_REQUEST_READ_STATUS_BYTE:
-			value = tmc_gadget_ctrl_req_read_status_byte(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC488_REQUEST_REN_CONTROL:
-			value = tmc_gadget_ctrl_req_ren_control(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC488_REQUEST_GOTO_LOCAL:
-			value = tmc_gadget_ctrl_req_goto_local(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC488_REQUEST_LOCAL_LOCKOUT:
-			value = tmc_gadget_ctrl_req_local_lockout(cdev, tmc, ctrl, req);
-			break;
-		case USBTMC_REQUEST_INITIATE_ABORT_BULK_OUT:
+		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_OUT:
 			value = tmc_gadget_ctrl_req_initiate_abort_bulk_out(cdev, tmc, ctrl, req);
 			break;
-		case USBTMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
+		case GADGET_TMC_REQ_CHECK_ABORT_BULK_OUT_STATUS:
 			value = tmc_gadget_ctrl_req_check_abort_bulk_out_status(cdev, tmc, ctrl, req);
 			break;
-		case USBTMC_REQUEST_INITIATE_ABORT_BULK_IN:
+		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_IN:
 			value = tmc_gadget_ctrl_req_initiate_abort_bulk_in(cdev, tmc, ctrl, req);
 			break;
-		case USBTMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
+		case GADGET_TMC_REQ_CHECK_ABORT_BULK_IN_STATUS:
 			value = tmc_gadget_ctrl_req_check_abort_bulk_in_status(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC_REQ_INITIATE_CLEAR:
+			value = tmc_gadget_ctrl_req_initiate_clear(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC_REQ_CHECK_CLEAR_STATUS:
+			value = tmc_gadget_ctrl_req_check_clear_status(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC_REQ_GET_CAPABILITIES:
+			value = tmc_gadget_ctrl_req_get_capabilities(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC_REQ_INDICATOR_PULSE:
+			value = tmc_gadget_ctrl_req_indicator_pulse(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC488_REQ_READ_STATUS_BYTE:
+			value = tmc_gadget_ctrl_req_read_status_byte(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC488_REQ_REN_CONTROL:
+			value = tmc_gadget_ctrl_req_ren_control(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC488_REQ_GOTO_LOCAL:
+			value = tmc_gadget_ctrl_req_goto_local(cdev, tmc, ctrl, req);
+			break;
+		case GADGET_TMC488_REQ_LOCAL_LOCKOUT:
+			value = tmc_gadget_ctrl_req_local_lockout(cdev, tmc, ctrl, req);
 			break;
 		default:
 			dev_err(&tmc->dev, "---- unhandled request (bRequest: %d)\n", ctrl->bRequest);
@@ -1729,19 +1728,19 @@ static bool tmc_gadget_function_req_match(struct usb_function *f, const struct u
 
 	switch(ctrl->bRequest)
 	{
-		case USBTMC_REQUEST_INITIATE_ABORT_BULK_OUT:
-		case USBTMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
-		case USBTMC_REQUEST_INITIATE_ABORT_BULK_IN:
-		case USBTMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
-		case USBTMC_REQUEST_INITIATE_CLEAR:
-		case USBTMC_REQUEST_CHECK_CLEAR_STATUS:
-		case USBTMC_REQUEST_GET_CAPABILITIES:
-		case USBTMC_REQUEST_INDICATOR_PULSE:
+		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_OUT:
+		case GADGET_TMC_REQ_CHECK_ABORT_BULK_OUT_STATUS:
+		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_IN:
+		case GADGET_TMC_REQ_CHECK_ABORT_BULK_IN_STATUS:
+		case GADGET_TMC_REQ_INITIATE_CLEAR:
+		case GADGET_TMC_REQ_CHECK_CLEAR_STATUS:
+		case GADGET_TMC_REQ_GET_CAPABILITIES:
+		case GADGET_TMC_REQ_INDICATOR_PULSE:
 			/* We are 488-compliant so we must handle the following requests as well */
-		case USBTMC488_REQUEST_READ_STATUS_BYTE:
-		case USBTMC488_REQUEST_REN_CONTROL:
-		case USBTMC488_REQUEST_GOTO_LOCAL:
-		case USBTMC488_REQUEST_LOCAL_LOCKOUT:
+		case GADGET_TMC488_REQ_READ_STATUS_BYTE:
+		case GADGET_TMC488_REQ_REN_CONTROL:
+		case GADGET_TMC488_REQ_GOTO_LOCAL:
+		case GADGET_TMC488_REQ_LOCAL_LOCKOUT:
 			ret = true;
 			break;
 	}
