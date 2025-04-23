@@ -123,14 +123,6 @@ struct tmc_device {
 	bool connection_reset;
 
 	/*
-	 * TMC specification members
-	 */
-	__u8 ren;
-	__u8 status_byte;
-	__u8 termchar;
-	enum tmc_gadget_remote_local_state rlstate;
-
-	/*
 	 * TMC device capabilities
 	 */
 	struct tmc488_capabilities device_capabilities;
@@ -146,7 +138,7 @@ struct tmc_device {
 	__u8 *current_rx_buf;				/* Start of the current RX buffer */
 
 	__u32 current_tx_bytes;				/* Current available TX bytes to send */
-	__u32 current_tx_bytes_remaining;		/* Remaining bytes in a TX transfer */
+	__u32 current_tx_bytes_remaining;	/* Remaining bytes in a TX transfer */
 	__u8 *current_tx_buf;				/* Start of the current TX buffer */
 
 	__u8 previous_bulk_out_tag;			/* The last bulk OUT bTag */

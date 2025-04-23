@@ -17,6 +17,11 @@
 static int32_t major = 0;
 static int32_t minor = 0;
 
+static u8 g_ren = 0;
+static u8 g_status_byte = 0;
+static u8 g_termchar = 0;
+enum tmc_gadget_remote_local_state g_rlstate = LOCS;
+
 static struct usb_endpoint_descriptor tmc_gadget_bulk_in_ep_fs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType	= USB_DT_ENDPOINT,
@@ -148,7 +153,7 @@ static int tmc_gadget_try_halt_bulk_out_endpoint(struct tmc_device *tmc)
 
 static int tmc_gadget_ioctl_write_stb(struct tmc_device *tmc, void __user *arg)
 {
-	if (get_user(tmc->status_byte, (__u8 __user *)arg)) // @suppress("Type cannot be resolved")
+	if (get_user(g_status_byte, (__u8 __user *)arg)) // @suppress("Type cannot be resolved")
 	{
 		return -EFAULT;
 	}
@@ -158,7 +163,7 @@ static int tmc_gadget_ioctl_write_stb(struct tmc_device *tmc, void __user *arg)
 
 static int tmc_gadget_ioctl_read_stb(struct tmc_device *tmc, void __user *arg)
 {
-	if (put_user(tmc->status_byte, (__u8 __user *)arg))// @suppress("Type cannot be resolved")
+	if (put_user(g_status_byte, (__u8 __user *)arg))// @suppress("Type cannot be resolved")
 	{
 		return -EFAULT;
 	}
@@ -178,20 +183,20 @@ static int tmc_gadget_ioctl_get_header(struct tmc_device *tmc, void __user *arg)
 
 static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_rl_state_machine_event event)
 {
-	switch(tmc->rlstate)
+	switch(g_rlstate)
 	{
 		case LOCS:
-			if (tmc->ren)
+			if (g_ren)
 			{
 				switch(event)
 				{
 					case TMC_EVENT_INITIATE_CLEAR:
 					case TMC_EVENT_TRIGGER:
 					case TMC_EVENT_DEV_DEP_MSG_OUT:
-						tmc->rlstate = REMS;
+						g_rlstate = REMS;
 						break;
 					case TMC_EVENT_LOCAL_LOCKOUT:
-						tmc->rlstate = LWLS;
+						g_rlstate = LWLS;
 						break;
 					default:
 						break;
@@ -204,7 +209,7 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 				case TMC_EVENT_INITIATE_CLEAR:
 				case TMC_EVENT_TRIGGER:
 				case TMC_EVENT_DEV_DEP_MSG_OUT:
-					tmc->rlstate = RWLS;
+					g_rlstate = RWLS;
 					break;
 				default:
 					break;
@@ -215,10 +220,10 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 			{
 				case TMC_EVENT_GOTO_LOCAL:
 				case TMC_EVENT_BUS_ACTIVITY:
-					tmc->rlstate = LOCS;
+					g_rlstate = LOCS;
 					break;
 				case TMC_EVENT_LOCAL_LOCKOUT:
-					tmc->rlstate = RWLS;
+					g_rlstate = RWLS;
 					break;
 				default:
 					break;
@@ -229,7 +234,7 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 			{
 				case TMC_EVENT_GOTO_LOCAL:
 				case TMC_EVENT_BUS_ACTIVITY:
-					tmc->rlstate = LWLS;
+					g_rlstate = LWLS;
 					break;
 				default:
 					break;
@@ -310,11 +315,11 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 					{
 						if(tmc->current_header.bmTransferAttributes & TMC_XFER_TERM_CHAR_ENABLED)
 						{
-							tmc->termchar = tmc->current_header.TermChar;
+							g_termchar = tmc->current_header.TermChar;
 						}
 						else
 						{
-							tmc->termchar = 0;
+							g_termchar = 0;
 						}
 					}
 					/*
@@ -631,7 +636,7 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 	if (send_term_char)
 	{
 		// Need to send a term char as its own transfer
-		uint8_t termchar_buffer[] = { tmc->termchar };
+		uint8_t termchar_buffer[] = { g_termchar };
 		memcpy((uint8_t *)req->buf, termchar_buffer, 1);
 		req->length = 1;
 
@@ -1118,7 +1123,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 	{
 		// USBTMC/USB488 3.4.2 Table 7
 		response.tag = (uint8_t) (USB_DIR_IN | (0x7F & w_value));
-		response.status_byte = tmc->status_byte;
+		response.status_byte = g_status_byte;
 
 		ret = sizeof(response);
 
@@ -1138,7 +1143,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 			struct status_response status;
 			status.USBTMC_status = USBTMC_STATUS_SUCCESS;
 			status.tag = (uint8_t) w_value;
-			status.status_byte = tmc->status_byte;
+			status.status_byte = g_status_byte;
 
 			ret = w_length;
 			memcpy(req->buf, (void *) &status, ret);
@@ -1156,7 +1161,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 		struct status_response status;
 		status.USBTMC_status = USBTMC_STATUS_SUCCESS;
 		status.tag = (uint8_t) w_value;
-		status.status_byte = tmc->status_byte;
+		status.status_byte = g_status_byte;
 
 		ret = w_length;
 		memcpy(req->buf, (void *) &status, ret);
@@ -1178,7 +1183,7 @@ static int tmc_gadget_ctrl_req_ren_control(struct usb_composite_dev *cdev, struc
 
 	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & USBTMC488_CAPABILITY_REN_CONTROL)
 	{
-		tmc->ren = 0xFF & w_value;
+		g_ren = 0xFF & w_value;
 		memcpy(req->buf, (void *) &response, w_length);
 		req->zero = 0;
 		req->length = w_length;
@@ -1518,11 +1523,6 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	tmc->interface = 0;
 	tmc->is_shutdown = true;
 	tmc->connection_reset = false;
-
-	tmc->ren = 0;
-	tmc->status_byte = 0;
-	tmc->termchar = 0;
-	tmc->rlstate = LOCS;
 
 	/*
 	 * Get TMC/488 capabilities from ConfigFS
