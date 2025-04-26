@@ -132,6 +132,7 @@ struct tmc_device {
 	 */
 	struct tmc_header current_header;
 	bool new_header_required;
+	bool new_header_available;
 
 	__u32 current_rx_bytes;				/* Current available RX bytes to read */
 	__u32 current_rx_bytes_remaining;	/* Total length of the current TMC message */
@@ -154,6 +155,7 @@ struct tmc_device {
 	 */
 	spinlock_t lock;						/* Lock this structure */
 	struct mutex io_lock;				/* Lock during read/write calls */
+	wait_queue_head_t header_wait;			/* Wait until there is a new header available */
 	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
 	wait_queue_head_t tx_wait;				/* Wait until we can write. */
 	bool rx_complete;

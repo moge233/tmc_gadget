@@ -13,13 +13,15 @@
 
 #include "u_tmc.h"
 
+static const bool USE_POLL_FOR_HEADER = true;
+
 static int32_t major = 0;
 static int32_t minor = 0;
 
 static u8 g_ren = 0;
 static u8 g_status_byte = 0;
 static u8 g_termchar = 0;
-enum tmc_gadget_remote_local_state g_rlstate = LOCS;
+static enum tmc_gadget_remote_local_state g_rlstate = LOCS;
 
 static struct usb_endpoint_descriptor tmc_gadget_bulk_in_ep_fs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
@@ -251,6 +253,8 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 	int status = req->status;
 	unsigned long flags = 0;
 
+	dev_dbg(&tmc->dev, "%s", __func__);
+
 	spin_lock_irqsave(&tmc->lock, flags);
 
 	switch(status)
@@ -264,6 +268,8 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 				 */
 				if (!tmc->current_rx_bytes_remaining)
 				{
+
+					dev_dbg(&tmc->dev, "%s: tmc->current_rx_bytes_remaining == 0", __func__);
 					if (req->actual < TMC_GADGET_HEADER_SIZE)
 					{
 						/*
@@ -275,7 +281,12 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 						break;
 					}
 
+					if (tmc->new_header_required && !tmc->new_header_available)
+					{
+						wake_up(&tmc->header_wait);
+					}
 					tmc->new_header_required = false;
+					tmc->new_header_available = true;
 					memcpy(&tmc->current_header, req->buf, TMC_GADGET_HEADER_SIZE);
 
 					/*
@@ -299,11 +310,37 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 					if ((tmc->current_header.MsgID == TMC_REQUEST_DEV_DEP_MSG_IN) ||
 							(tmc->current_header.MsgID == TMC_REQUEST_VENDOR_SPECIFIC_IN))
 					{
-						tmc->current_rx_bytes_remaining = TMC_GADGET_HEADER_SIZE;
+
+						dev_dbg(&tmc->dev, "%s: tmc->current_header.MsgID: TMC_REQUEST_DEV_DEP_MSG_IN", __func__);
+						if (USE_POLL_FOR_HEADER)
+						{
+							tmc->current_rx_bytes_remaining = 0;
+							tmc->current_rx_bytes = 0;
+							tmc->current_rx_buf = NULL;
+							tmc->new_header_required = true;
+							dev_dbg(&tmc->dev, "%s: tmc->current_rx_bytes_remaining = 0", __func__);
+						}
+						else
+						{
+							tmc->current_rx_bytes_remaining = TMC_GADGET_HEADER_SIZE;
+							dev_dbg(&tmc->dev, "%s: tmc->current_rx_bytes_remaining = TMC_GADGET_HEADER_SIZE", __func__);
+						}
 					}
 					else
 					{
-						tmc->current_rx_bytes_remaining = TMC_GADGET_HEADER_SIZE + tmc->current_header.TransferSize;
+						dev_dbg(&tmc->dev, "%s: tmc->current_header.MsgID: TMC_DEV_DEP_MSG_OUT", __func__);
+						if (USE_POLL_FOR_HEADER)
+						{
+							tmc->current_rx_bytes_remaining = tmc->current_header.TransferSize;
+							tmc->current_rx_bytes = req->actual - TMC_GADGET_HEADER_SIZE;
+							tmc->current_rx_buf = req->buf + TMC_GADGET_HEADER_SIZE;
+							dev_dbg(&tmc->dev, "%s: tmc->current_rx_bytes_remaining = %u", __func__, tmc->current_header.TransferSize);
+						}
+						else
+						{
+							tmc->current_rx_bytes_remaining = TMC_GADGET_HEADER_SIZE + tmc->current_header.TransferSize;
+							dev_dbg(&tmc->dev, "%s: tmc->current_rx_bytes_remaining = %lu", __func__, TMC_GADGET_HEADER_SIZE + tmc->current_header.TransferSize);
+						}
 					}
 
 					/*
@@ -328,6 +365,16 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 					tmc->current_rx_bytes_remaining += (tmc->current_rx_bytes_remaining % 4)
 									? (4 - (tmc->current_rx_bytes_remaining % 4))
 									: 0;
+				}
+				else
+				{
+					if (USE_POLL_FOR_HEADER)
+					{
+						dev_dbg(&tmc->dev, "%s: tmc->current_rx_bytes_remaining: %u", __func__, tmc->current_rx_bytes_remaining);
+						tmc->current_rx_bytes = req->actual;
+						tmc->current_rx_buf = req->buf;
+						dev_dbg(&tmc->dev, "%s: tmc->current_rx_bytes: %u", __func__, tmc->current_rx_bytes);
+					}
 				}
 				tmc->rx_complete = true;
 				tmc->bulk_out_queued = false;
@@ -414,6 +461,8 @@ static int tmc_gadget_setup_bulk_out_req(struct tmc_device *tmc)
 	struct usb_request *req;
 	int error = 0;
 
+	dev_dbg(&tmc->dev, "%s", __func__);
+
 	req = tmc->bulk_out_req;
 
 	/* The USB Host sends us whatever amount of data it wants to
@@ -460,6 +509,8 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 {
 	struct tmc_device *tmc = file->private_data;
 	unsigned long flags = 0;
+
+	dev_dbg(&tmc->dev, "%s", __func__);
 
 	if (len == 0)
 	{
@@ -678,6 +729,8 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 	unsigned long flags = 0;
 	size_t size;
 
+	dev_dbg(&tmc->dev, "%s", __func__);
+
 	if (len == 0)
 	{
 		return -EINVAL;
@@ -694,7 +747,9 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 	bytes_copied = 0;
 	current_rx_bytes = tmc->current_rx_bytes;
 
-	if (!current_rx_bytes)
+	dev_dbg(&tmc->dev, "%s: current_rx_bytes: %lu", __func__, current_rx_bytes);
+
+	if (!current_rx_bytes && !tmc->new_header_available)
 	{
 		int err = tmc_gadget_setup_bulk_out_req(tmc);
 		if (err)
@@ -705,6 +760,8 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 
 	if ((current_rx_bytes == 0) && !tmc->rx_complete)
 	{
+		dev_dbg(&tmc->dev, "%s: (current_rx_bytes) == 0 && !tmc->rx_complete", __func__);
+
 		/* Turn interrupts back on before sleeping. */
 		spin_unlock_irqrestore(&tmc->lock, flags);
 
@@ -726,20 +783,39 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 	/* We have data to return then copy it to the caller's buffer.*/
 	while ((current_rx_bytes || tmc->rx_complete) && len)
 	{
-		if (current_rx_bytes == 0)
+		if (USE_POLL_FOR_HEADER)
 		{
 			req = tmc->bulk_out_req;
-
-			if (req->actual && req->buf)
+			if (current_rx_bytes == 0)
 			{
 				current_rx_bytes = req->actual;
 				current_rx_buf = req->buf;
+				dev_dbg(&tmc->dev, "%s: current_rx_buf: %s", __func__, current_rx_buf);
+			}
+			else
+			{
+				current_rx_bytes = tmc->current_rx_bytes;
+				current_rx_buf = tmc->current_rx_buf;
+				dev_dbg(&tmc->dev, "%s: current_rx_buf: %s", __func__, current_rx_buf);
 			}
 		}
 		else
 		{
-			current_rx_bytes = tmc->current_rx_bytes;
-			current_rx_buf = tmc->current_rx_buf;
+			if (current_rx_bytes == 0)
+			{
+				req = tmc->bulk_out_req;
+
+				if (req->actual && req->buf)
+				{
+					current_rx_bytes = req->actual;
+					current_rx_buf = req->buf;
+				}
+			}
+			else
+			{
+				current_rx_bytes = tmc->current_rx_bytes;
+				current_rx_buf = tmc->current_rx_buf;
+			}
 		}
 
 		/* Don't leave irqs off while doing memory copies */
@@ -754,10 +830,14 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 			size = len;
 		}
 
+		dev_dbg(&tmc->dev, "%s: size: %lu", __func__, size);
+
 		size -= copy_to_user(buf, current_rx_buf, size);
 		bytes_copied += size;
 		len -= size;
 		buf += size;
+
+		dev_dbg(&tmc->dev, "%s: bytes_copied: %lu", __func__, bytes_copied);
 
 		tmc->current_rx_bytes_remaining -= bytes_copied;
 		if (!tmc->current_rx_bytes_remaining)
@@ -781,6 +861,8 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 			tmc->bulk_out_req = tmc_gadget_req_alloc(tmc->bulk_out_ep, TMC_GADGET_BULK_ENDPOINT_SIZE, GFP_KERNEL);
 			tmc->previous_bulk_out_tag = tmc->current_header.bTag;
 		}
+
+		dev_dbg(&tmc->dev, "%s: current_rx_bytes: %lu", __func__, current_rx_bytes);
 	}
 
 	tmc->current_rx_buf = current_rx_buf;
@@ -810,29 +892,32 @@ static __poll_t tmc_gadget_fops_poll(struct file *file, struct poll_table_struct
 	struct tmc_device *tmc  = file->private_data;
 	__poll_t	ret = 0;
 
+	dev_dbg(&tmc->dev, "%s", __func__);
+
 	mutex_lock(&tmc->io_lock);
 	spin_lock_irqsave(&tmc->lock, flags);
+	if (!tmc->current_rx_bytes_remaining && !tmc->new_header_available)
+	{
+		if (tmc_gadget_setup_bulk_out_req(tmc))
+		{
+			spin_unlock_irqrestore(&tmc->lock, flags);
+			mutex_unlock(&tmc->io_lock);
+			return ret;
+		}
+	}
 
-	// tmc_setup_bulk_out_req(tmc);
 	spin_unlock_irqrestore(&tmc->lock, flags);
 	mutex_unlock(&tmc->io_lock);
 
-	poll_wait(file, &tmc->rx_wait, wait);
-	poll_wait(file, &tmc->tx_wait, wait);
+	poll_wait(file, &tmc->header_wait, wait);
+	dev_dbg(&tmc->dev, "%s: poll_wait() complete", __func__);
 
-	spin_lock_irqsave(&tmc->lock, flags);
-
-	if (!tmc->tx_pending)
+	if (tmc->new_header_available)
 	{
-		ret |= EPOLLOUT | EPOLLWRNORM;
+		dev_dbg(&tmc->dev, "%s: tmc->new_header_available", __func__);
+		tmc->new_header_available = false;
+		ret |= EPOLLIN;
 	}
-
-	if (likely(tmc->current_rx_bytes) || tmc->rx_complete)
-	{
-		ret |= EPOLLIN | EPOLLRDNORM;
-	}
-
-	spin_unlock_irqrestore(&tmc->lock, flags);
 
 	return ret;
 }
@@ -843,6 +928,9 @@ static long tmc_gadget_fops_ioctl(struct file *file, unsigned int cmd, unsigned 
 	unsigned long flags = 0;
 	long ret = 0;
 
+	dev_dbg(&tmc->dev, "%s", __func__);
+
+	mutex_lock(&tmc->io_lock);
 	spin_lock_irqsave(&tmc->lock, flags);
 	switch(cmd)
 	{
@@ -859,12 +947,14 @@ static long tmc_gadget_fops_ioctl(struct file *file, unsigned int cmd, unsigned 
 			ret = (long) tmc_gadget_ioctl_write_stb(tmc, (void __user *)arg);
 			break;
 		case GADGET_TMC_IOCTL_GET_HEADER:
+			dev_dbg(&tmc->dev, "%s: GADGET_TMC_IOCTL_GET_HEADER", __func__);
 			ret = (long) tmc_gadget_ioctl_get_header(tmc, (void __user *)arg);
 			break;
 		default:
 			break;
 	}
 	spin_unlock_irqrestore(&tmc->lock, flags);
+	mutex_unlock(&tmc->io_lock);
 	return ret;
 }
 
@@ -1538,6 +1628,7 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 
 	memset(&tmc->current_header, 0, sizeof(tmc->current_header));
 	tmc->new_header_required = true;
+	tmc->new_header_available = false;
 
 	tmc->current_rx_bytes = 0;
 	tmc->current_rx_bytes_remaining = 0;
@@ -1557,6 +1648,7 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 
 	spin_lock_init(&tmc->lock);
 	mutex_init(&tmc->io_lock);
+	init_waitqueue_head(&tmc->header_wait);
 	init_waitqueue_head(&tmc->rx_wait);
 	init_waitqueue_head(&tmc->tx_wait);
 	tmc->rx_complete = false;
