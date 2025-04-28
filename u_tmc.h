@@ -13,6 +13,7 @@
 #include <linux/types.h>
 #include <linux/usb/composite.h>
 #include <linux/usb/gadget.h>
+#include <linux/usb/g_tmc.h>
 
 
 #define TMC_GADGET_NUM_ENDPOINTS		3
@@ -51,7 +52,7 @@ enum tmc_gadget_transfer_attributes {
 	TMC_XFER_TERM_CHAR_ENABLED = 2,
 };
 
-struct tmc488_capabilities {
+struct gadget_tmc488_capabilities {
 	__u16 bcdUSBTMC;
 	__u8 bmUSBTMCInterfaceCapabilities;
 	__u8 bmUSBTMCDeviceCapabilities;
@@ -80,27 +81,10 @@ struct status_response {
 	__u8 status_byte;
 } __attribute__((packed));
 
-struct interrupt_response {
-	__u8 tag;
-	__u8 status_byte;
-} __attribute__((packed));
-
 struct status_byte_response {
 	__u8 tag;
 	__u8 status_byte;
 } __attribute__((packed));
-
-struct tmc_header {
-	__u8 MsgID;
-	__u8 bTag;
-	__u8 bTagInverse;
-	__u8 reserved1;
-	__u32 TransferSize;
-	__u8 bmTransferAttributes;
-	__u8 TermChar;
-	__u8 reserved2[2];
-} __attribute__((packed));
-#define TMC_GADGET_HEADER_SIZE sizeof(struct tmc_header)
 
 struct tmc_device {
 	/*
@@ -125,12 +109,12 @@ struct tmc_device {
 	/*
 	 * TMC device capabilities
 	 */
-	struct tmc488_capabilities device_capabilities;
+	struct gadget_tmc488_capabilities device_capabilities;
 
 	/*
 	 * Message status members
 	 */
-	struct tmc_header current_header;
+	struct usbtmc_header current_header;
 	bool new_header_required;
 	bool new_header_available;
 

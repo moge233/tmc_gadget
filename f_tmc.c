@@ -9,11 +9,8 @@
 #include <linux/configfs.h>
 #include <linux/fs.h>
 #include <linux/poll.h>
-#include <linux/usb/g_tmc.h>
 
 #include "u_tmc.h"
-
-static const bool USE_POLL_FOR_HEADER = true;
 
 static int32_t major = 0;
 static int32_t minor = 0;
@@ -267,7 +264,7 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 				if (!tmc->current_rx_bytes_remaining)
 				{
 
-					if (req->actual < TMC_GADGET_HEADER_SIZE)
+					if (req->actual < GADGET_TMC_HEADER_SIZE)
 					{
 						/*
 						 * Halt the bulk out endpoint and discard any received data
@@ -278,22 +275,16 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 						break;
 					}
 
-					if (tmc->new_header_required && !tmc->new_header_available)
-					{
-						wake_up(&tmc->header_wait);
-					}
-					tmc->new_header_required = false;
-					tmc->new_header_available = true;
-					memcpy(&tmc->current_header, req->buf, TMC_GADGET_HEADER_SIZE);
+					memcpy(&tmc->current_header, req->buf, GADGET_TMC_HEADER_SIZE);
 
 					/*
 					 * Check the MsgID value to make sure it is recognized and supported
 					 */
-					if ((tmc->current_header.MsgID != TMC_DEV_DEP_MSG_OUT) &&
-							(tmc->current_header.MsgID != TMC_REQUEST_DEV_DEP_MSG_IN) &&
-							(tmc->current_header.MsgID != TMC_VENDOR_SPECIFIC_OUT) &&
-							(tmc->current_header.MsgID != TMC_REQUEST_VENDOR_SPECIFIC_IN) &&
-							(tmc->current_header.MsgID != TMC_488_TRIGGER))
+					if ((tmc->current_header.MsgID != GADGET_TMC_DEV_DEP_MSG_OUT) &&
+							(tmc->current_header.MsgID != GADGET_TMC_DEV_DEP_MSG_IN) &&
+							(tmc->current_header.MsgID != GADGET_TMC_VENDOR_SPECIFIC_OUT) &&
+							(tmc->current_header.MsgID != GADGET_TMC_VENDOR_SPECIFIC_IN) &&
+							(tmc->current_header.MsgID != GADGET_TMC488_TRIGGER))
 					{
 						/*
 						 * Halt the bulk out endpoint and discard any received data
@@ -303,43 +294,24 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 						dev_err(&tmc->dev, "unrecognized header MsgID value (%u)\n", tmc->current_header.MsgID);
 						break;
 					}
-
-					if ((tmc->current_header.MsgID == TMC_REQUEST_DEV_DEP_MSG_IN) ||
-							(tmc->current_header.MsgID == TMC_REQUEST_VENDOR_SPECIFIC_IN))
-					{
-
-						if (USE_POLL_FOR_HEADER)
-						{
-							tmc->current_rx_bytes_remaining = 0;
-							tmc->current_rx_bytes = 0;
-							tmc->current_rx_buf = NULL;
-							tmc->new_header_required = true;
-						}
-						else
-						{
-							tmc->current_rx_bytes_remaining = TMC_GADGET_HEADER_SIZE;
-						}
-					}
 					else
 					{
-						if (USE_POLL_FOR_HEADER)
+						tmc->new_header_available = true;
+
+						if (tmc->new_header_required)
 						{
-							tmc->current_rx_bytes_remaining = tmc->current_header.TransferSize;
-							tmc->current_rx_bytes = req->actual - TMC_GADGET_HEADER_SIZE;
-							tmc->current_rx_buf = req->buf + TMC_GADGET_HEADER_SIZE;
-						}
-						else
-						{
-							tmc->current_rx_bytes_remaining = TMC_GADGET_HEADER_SIZE + tmc->current_header.TransferSize;
+							wake_up(&tmc->header_wait);
 						}
 					}
 
-					/*
-					 * Check the transfer attributes for an End of Message character or Termination Character
-					 */
-					if ((tmc->current_header.MsgID == TMC_REQUEST_DEV_DEP_MSG_IN) ||
-							(tmc->current_header.MsgID == TMC_REQUEST_VENDOR_SPECIFIC_IN))
+					if ((tmc->current_header.MsgID == GADGET_TMC_REQUEST_DEV_DEP_MSG_IN) ||
+							(tmc->current_header.MsgID == GADGET_TMC_REQUEST_VENDOR_SPECIFIC_IN))
 					{
+						tmc->current_rx_bytes_remaining = 0;
+						tmc->current_rx_bytes = 0;
+						tmc->current_rx_buf = NULL;
+						tmc->new_header_required = true;
+
 						if(tmc->current_header.bmTransferAttributes & TMC_XFER_TERM_CHAR_ENABLED)
 						{
 							g_termchar = tmc->current_header.TermChar;
@@ -349,6 +321,22 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 							g_termchar = 0;
 						}
 					}
+					else
+					{
+						tmc->current_rx_bytes_remaining = tmc->current_header.TransferSize;
+						tmc->current_rx_bytes = req->actual - GADGET_TMC_HEADER_SIZE;
+						tmc->current_rx_buf = req->buf + GADGET_TMC_HEADER_SIZE;
+
+						if (!tmc->current_rx_bytes)
+						{
+							tmc->new_header_required = true;
+						}
+						else
+						{
+							tmc->new_header_required = false;
+						}
+					}
+
 					/*
 					 * The total number of bytes sent must be a multiple of 4 so check
 					 * for alignment bytes here
@@ -359,11 +347,8 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 				}
 				else
 				{
-					if (USE_POLL_FOR_HEADER)
-					{
-						tmc->current_rx_bytes = req->actual;
-						tmc->current_rx_buf = req->buf;
-					}
+					tmc->current_rx_bytes = req->actual;
+					tmc->current_rx_buf = req->buf;
 				}
 				tmc->rx_complete = true;
 				tmc->bulk_out_queued = false;
@@ -377,24 +362,29 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 			tmc->new_header_required = true;
 			tmc->rx_complete = false;
 			tmc->connection_reset = true;
+			wake_up(&tmc->header_wait);
 			dev_err(&tmc->dev, "%s: ECONNRESET, status: %d\n", __func__, status);
 			break;
 		case -ESHUTDOWN:
 			tmc->new_header_required = true;
 			tmc->rx_complete = false;
 			tmc->connection_reset = true;
+			wake_up(&tmc->header_wait);
 			dev_err(&tmc->dev, "%s: ESHUTDOWN, status: %d\n", __func__, status);
 			break;
 		case -ECONNABORTED:
+			wake_up(&tmc->header_wait);
 			dev_err(&tmc->dev, "%s: ECONNABORTED, status: %d\n", __func__, status);
 			break;
 		case -EOVERFLOW:
-			dev_err(&tmc->dev, "%s: EOVERFLOW, status: %d\n", __func__, status);
-			break;
+			wake_up(&tmc->header_wait);
+			dev_err(&tmc->dev, "%s: EOVERFLOW, status: %d\n", __func__, status);			break;
 		case -EPIPE:
+			wake_up(&tmc->header_wait);
 			dev_err(&tmc->dev, "%s: EPIPE, status: %d\n", __func__, status);
 			break;
 		default:
+			wake_up(&tmc->header_wait);
 			dev_err(&tmc->dev, "%s: default, status: %d\n", __func__, status);
 			break;
 	}
@@ -416,12 +406,10 @@ static void tmc_gadget_bulk_in_req_complete(struct usb_ep *ep, struct usb_reques
 			tmc->bulk_in_queued = false;
 			break;
 		case -ECONNRESET:		/* unlink */
-			tmc->tx_pending = false;
 			tmc->connection_reset = true;
 			dev_err(&tmc->dev, "%s: ECONNRESET, status: %d\n", __func__, status);
 			break;
 		case -ESHUTDOWN:		/* disconnect etc */
-			tmc->tx_pending = false;
 			tmc->connection_reset = true;
 			dev_err(&tmc->dev, "%s: ESHUTDOWN, status: %d\n", __func__, status);
 			break;
@@ -449,6 +437,11 @@ static int tmc_gadget_setup_bulk_out_req(struct tmc_device *tmc)
 {
 	struct usb_request *req;
 	int error = 0;
+
+	if (tmc->bulk_out_queued)
+	{
+		return -EBUSY;
+	}
 
 	req = tmc->bulk_out_req;
 
@@ -534,7 +527,7 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 	bool send_term_char = false;
 	bool header_required = true;
 
-	tmc->current_tx_bytes_remaining = TMC_GADGET_HEADER_SIZE + len;
+	tmc->current_tx_bytes_remaining = GADGET_TMC_HEADER_SIZE + len;
 	tmc->current_tx_buf = (uint8_t *)buf;
 
 	req = tmc->bulk_in_req;
@@ -549,8 +542,8 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 
 		if (header_required)
 		{
-			struct tmc_header response_header;
-			memset(&response_header, 0, sizeof(struct tmc_header));
+			struct usbtmc_header response_header;
+			memset(&response_header, 0, sizeof(response_header));
 
 			response_header.MsgID = TMC_DEV_DEP_MSG_IN;
 			response_header.bTag = tmc->current_header.bTag;
@@ -575,12 +568,12 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 
 			response_header.bmTransferAttributes |= 1; // EOM
 
-			memcpy(response_ptr, &response_header, TMC_GADGET_HEADER_SIZE);
+			memcpy(response_ptr, &response_header, GADGET_TMC_HEADER_SIZE);
 
-			response_ptr += TMC_GADGET_HEADER_SIZE;
-			write_count += TMC_GADGET_HEADER_SIZE;
-			tmc->current_tx_bytes_remaining -= TMC_GADGET_HEADER_SIZE;
-			room_left -= TMC_GADGET_HEADER_SIZE;
+			response_ptr += GADGET_TMC_HEADER_SIZE;
+			write_count += GADGET_TMC_HEADER_SIZE;
+			tmc->current_tx_bytes_remaining -= GADGET_TMC_HEADER_SIZE;
+			room_left -= GADGET_TMC_HEADER_SIZE;
 			header_required = false;
 		}
 
@@ -762,37 +755,16 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 	/* We have data to return then copy it to the caller's buffer.*/
 	while ((current_rx_bytes || tmc->rx_complete) && len)
 	{
-		if (USE_POLL_FOR_HEADER)
+		req = tmc->bulk_out_req;
+		if (current_rx_bytes == 0)
 		{
-			req = tmc->bulk_out_req;
-			if (current_rx_bytes == 0)
-			{
-				current_rx_bytes = req->actual;
-				current_rx_buf = req->buf;
-			}
-			else
-			{
-				current_rx_bytes = tmc->current_rx_bytes;
-				current_rx_buf = tmc->current_rx_buf;
-			}
+			current_rx_bytes = req->actual;
+			current_rx_buf = req->buf;
 		}
 		else
 		{
-			if (current_rx_bytes == 0)
-			{
-				req = tmc->bulk_out_req;
-
-				if (req->actual && req->buf)
-				{
-					current_rx_bytes = req->actual;
-					current_rx_buf = req->buf;
-				}
-			}
-			else
-			{
-				current_rx_bytes = tmc->current_rx_bytes;
-				current_rx_buf = tmc->current_rx_buf;
-			}
+			current_rx_bytes = tmc->current_rx_bytes;
+			current_rx_buf = tmc->current_rx_buf;
 		}
 
 		/* Don't leave irqs off while doing memory copies */
@@ -899,10 +871,16 @@ static long tmc_gadget_fops_ioctl(struct file *file, unsigned int cmd, unsigned 
 	switch(cmd)
 	{
 		case GADGET_TMC_IOCTL_ABORT_BULK_OUT:
-			usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req);
+			if (tmc->bulk_out_queued)
+			{
+				usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req);
+			}
 			break;
 		case GADGET_TMC_IOCTL_ABORT_BULK_IN:
-			usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_out_req);
+			if (tmc->bulk_in_queued)
+			{
+				usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_out_req);
+			}
 			break;
 		case GADGET_TMC488_IOCTL_GET_STB:
 			ret = (long) tmc_gadget_ioctl_read_stb(tmc, (void __user *)arg);
