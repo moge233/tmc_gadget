@@ -31,13 +31,6 @@
 #define TMC_488_TRIGGER					128
 
 
-enum tmc_gadget_remote_local_state {
-	LOCS,
-	LWLS,
-	REMS,
-	RWLS,
-};
-
 enum tmc_gadget_rl_state_machine_event {
 	TMC_EVENT_INITIATE_CLEAR,
 	TMC_EVENT_TRIGGER,
