@@ -245,15 +245,13 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 
 static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_request *req)
 {
-
 	struct tmc_device *tmc = (struct tmc_device *)ep->driver_data;
 	int status = req->status;
 	unsigned long flags = 0;
 
 	spin_lock_irqsave(&tmc->lock, flags);
 
-	switch(status)
-	{
+	switch(status) {
 		case 0:
 			if (req->actual > 0)
 			{
@@ -1484,8 +1482,7 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	{
 		goto ERROR_BULK_IN_EP_AUTOCONFIG_FAIL;
 	}
-	else
-	{
+	else {
 		tmc->bulk_in_ep = ep;
 	}
 
@@ -1494,8 +1491,7 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	{
 		goto ERROR_BULK_OUT_EP_AUTOCONFIG_FAIL;
 	}
-	else
-	{
+	else {
 		tmc->bulk_out_ep = ep;
 	}
 
@@ -1506,8 +1502,7 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 		usb_ep_autoconfig_release(tmc->bulk_in_ep);
 		goto ERROR_INTERRUPT_EP_AUTOCONFIG_FAIL;
 	}
-	else
-	{
+	else {
 		tmc->interrupt_ep = ep;
 	}
 
@@ -1542,6 +1537,9 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	{
 		goto ERROR_INTERRUPT_REQ_ALLOC_FAIL;
 	}
+
+	memset(&tmc->header, 0, TMC_HEADER_SIZE);
+	tmc->header_required = true;
 
 	/* Create the char device */
 	cdev_init(&tmc->cdev, &f_tmc_fops);
@@ -1677,7 +1675,6 @@ static int tmc_gadget_function_set_alt(struct usb_function *f, unsigned interfac
 
 static void tmc_gadget_function_disable(struct usb_function *f)
 {
-
 	struct tmc_device *tmc = tmc_gadget_function_to_tmc_device(f);
 
 	tmc_gadget_reset_interface(tmc);

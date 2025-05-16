@@ -158,7 +158,6 @@ struct tmc_device {
 	struct usb_request *bulk_out_req;
 	struct usb_request *bulk_in_req;
 	struct usb_request *interrupt_req;
-
 };
 
 struct f_tmc_opts {
