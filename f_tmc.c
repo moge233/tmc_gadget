@@ -18,7 +18,7 @@ static int32_t minor = 0;
 static u8 g_ren = 0;
 static u8 g_status_byte = 0;
 static u8 g_termchar = 0;
-static enum tmc_gadget_remote_local_state g_rlstate = LOCS;
+static enum usbtmc_rl_state g_rlstate = LOCS;
 
 static struct usb_endpoint_descriptor tmc_gadget_bulk_in_ep_fs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
@@ -1538,8 +1538,8 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 		goto ERROR_INTERRUPT_REQ_ALLOC_FAIL;
 	}
 
-	memset(&tmc->header, 0, TMC_HEADER_SIZE);
-	tmc->header_required = true;
+	memset(&tmc->current_header, 0, GADGET_TMC_HEADER_SIZE);
+	tmc->new_header_required = true;
 
 	/* Create the char device */
 	cdev_init(&tmc->cdev, &f_tmc_fops);
