@@ -1,5 +1,5 @@
 
-KERNEL_DIR ?= $(HOME)/keithley/ti-linux/linux-6.6.11
+KERNEL_DIR ?= $(HOME)/keithley/ti-linux/linux-ti-linux-6.12.y
 
 USB_TMC_FUNC = f_tmc
 obj-m += $(USB_TMC_FUNC).o
