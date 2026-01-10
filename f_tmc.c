@@ -9,6 +9,7 @@
 #include <linux/configfs.h>
 #include <linux/fs.h>
 #include <linux/poll.h>
+#include <linux/uaccess.h>
 
 #include "u_tmc.h"
 
@@ -16,7 +17,7 @@ static int32_t major = 0;
 static int32_t minor = 0;
 
 static u8 g_ren = 0;
-static u8 g_status_byte = 0;
+static u32 g_status_byte = 0;
 static u8 g_termchar = 0;
 static enum usbtmc_rl_state g_rlstate = LOCS;
 
@@ -151,22 +152,60 @@ static int tmc_gadget_try_halt_bulk_out_endpoint(struct tmc_device *tmc)
 
 static int tmc_gadget_ioctl_write_stb(struct tmc_device *tmc, void __user *arg)
 {
-	if (get_user(g_status_byte, (__u8 __user *)arg)) // @suppress("Type cannot be resolved")
+	dev_info(&tmc->dev, "%s: g_status_byte: %d\n", __func__, g_status_byte);
+
+	if (access_ok(arg, sizeof(g_status_byte)))
 	{
-		return -EFAULT;
+		return copy_from_user(&g_status_byte, (__u32 __user *)arg, sizeof(g_status_byte));
 	}
 
-	return 0;
+	return -EFAULT;
 }
 
 static int tmc_gadget_ioctl_read_stb(struct tmc_device *tmc, void __user *arg)
 {
-	if (put_user(g_status_byte, (__u8 __user *)arg))// @suppress("Type cannot be resolved")
+	dev_info(&tmc->dev, "%s: g_status_byte: %d\n", __func__, g_status_byte);
+
+	if (access_ok(arg, sizeof(g_status_byte)))
 	{
-		return -EFAULT;
+		return copy_to_user((__u32 __user *)arg, &g_status_byte, sizeof(g_status_byte));
 	}
 
-	return 0;
+	return -EFAULT;
+}
+
+static int tmc_gadget_ioctl_write_rl_state(struct tmc_device *tmc, void __user *arg)
+{
+	dev_info(&tmc->dev, "%s: g_rlstate: %d\n", __func__, g_rlstate);
+
+	if (access_ok(arg, sizeof(g_rlstate)))
+	{
+		__u32 rlstate_copy = 0;
+		unsigned long err = copy_from_user(&rlstate_copy, (__u32 __user *)arg, sizeof(__u32));
+		if (err)
+		{
+			return -EFAULT;
+		}
+
+		g_rlstate = (enum usbtmc_rl_state) rlstate_copy;
+
+		return 0;
+	}
+
+	return -EFAULT;
+}
+
+static int tmc_gadget_ioctl_read_rl_state(struct tmc_device *tmc, void __user *arg)
+{
+	dev_info(&tmc->dev, "%s: g_rlstate: %d\n", __func__, g_rlstate);
+
+	if (access_ok(arg, sizeof(__u32)))
+	{
+		__u32 rlstate_copy = (__u32) g_rlstate;
+		return copy_to_user((__u32 __user *) arg, &rlstate_copy, sizeof(__u32));
+	}
+
+	return -EFAULT;
 }
 
 static int tmc_gadget_ioctl_get_header(struct tmc_device *tmc, void __user *arg)
@@ -376,7 +415,8 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 			break;
 		case -EOVERFLOW:
 			wake_up(&tmc->header_wait);
-			dev_err(&tmc->dev, "%s: EOVERFLOW, status: %d\n", __func__, status);			break;
+			dev_err(&tmc->dev, "%s: EOVERFLOW, status: %d\n", __func__, status);
+			break;
 		case -EPIPE:
 			wake_up(&tmc->header_wait);
 			dev_err(&tmc->dev, "%s: EPIPE, status: %d\n", __func__, status);
@@ -886,6 +926,12 @@ static long tmc_gadget_fops_ioctl(struct file *file, unsigned int cmd, unsigned 
 		case GADGET_TMC488_IOCTL_SET_STB:
 			ret = (long) tmc_gadget_ioctl_write_stb(tmc, (void __user *)arg);
 			break;
+		case GADGET_TMC488_IOCTL_GET_RL_STATE:
+			ret = (long) tmc_gadget_ioctl_read_rl_state(tmc, (void __user *)arg);
+			break;
+		case GADGET_TMC488_IOCTL_SET_RL_STATE:
+			ret = (long) tmc_gadget_ioctl_write_rl_state(tmc, (void __user *)arg);
+			break;
 		case GADGET_TMC_IOCTL_GET_HEADER:
 			ret = (long) tmc_gadget_ioctl_get_header(tmc, (void __user *)arg);
 			break;
@@ -1131,6 +1177,9 @@ static int tmc_gadget_ctrl_req_indicator_pulse(struct usb_composite_dev *cdev, s
 		req->zero = 0;
 		req->length = w_length;
 		ret = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
+		/*
+		 * TODO: Indicator pulse
+		 */
 	}
 	else
 	{
@@ -1152,7 +1201,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 	{
 		// USBTMC/USB488 3.4.2 Table 7
 		response.tag = (uint8_t) (USB_DIR_IN | (0x7F & w_value));
-		response.status_byte = g_status_byte;
+		response.status_byte = (__u8) g_status_byte;
 
 		ret = sizeof(response);
 
@@ -1595,6 +1644,13 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 
 	opts->tmc = tmc;
 
+	if (tmc->device_capabilities.bmUSBTMCInterfaceCapabilities & GADGET_TMC_CAPABILITY_INDICATOR_PULSE)
+	{
+		/*
+		 * TODO: Need an indicator (LED)
+		 */
+	}
+
 	return 0;
 
 ERROR_CDEV_DEVICE_ADD_FAIL:
@@ -2006,6 +2062,42 @@ static ssize_t f_tmc_bmUSB488DeviceCapabilities_store(struct config_item *item, 
 }
 CONFIGFS_ATTR(f_tmc_, bmUSB488DeviceCapabilities);
 
+//cppcheck-suppress unusedFunction
+static ssize_t f_tmc_REN_show(struct config_item *item, char *page)
+{
+	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
+	int result;
+
+	mutex_lock(&opts->io_lock);
+	result = sprintf(page, "%d", g_ren);
+	mutex_unlock(&opts->io_lock);
+
+	return result;
+}
+
+//cppcheck-suppress unusedFunction
+static ssize_t f_tmc_REN_store(struct config_item *item, const char *page, size_t len)
+{
+	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
+	int result;
+	uint8_t num;
+
+	mutex_lock(&opts->io_lock);
+	result = kstrtou8(page, 0, &num);
+	if (result)
+	{
+		mutex_unlock(&opts->io_lock);
+		return result;
+	}
+
+	g_ren = num;
+	result = len;
+	mutex_unlock(&opts->io_lock);
+
+	return result;
+}
+CONFIGFS_ATTR(f_tmc_, REN);
+
 static struct configfs_attribute *tmc_attrs[] = {
 	&f_tmc_attr_bcdUSBTMC,
 	&f_tmc_attr_bmUSBTMCInterfaceCapabilities,
@@ -2013,6 +2105,7 @@ static struct configfs_attribute *tmc_attrs[] = {
 	&f_tmc_attr_bcdUSB488,
 	&f_tmc_attr_bmUSB488InterfaceCapabilities,
 	&f_tmc_attr_bmUSB488DeviceCapabilities,
+	&f_tmc_attr_REN,
 	NULL,
 };
 
