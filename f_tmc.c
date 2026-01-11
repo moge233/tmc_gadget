@@ -5,9 +5,10 @@
  *      Author: matt
  */
 
-#include <linux/errno.h>
 #include <linux/configfs.h>
+#include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/minmax.h>
 #include <linux/poll.h>
 
 #include "u_tmc.h"
@@ -1108,7 +1109,7 @@ static int tmc_gadget_ctrl_req_get_capabilities(struct usb_composite_dev *cdev, 
 	{
 		response.USBTMC_status = GADGET_TMC_STATUS_FAILED;
 	}
-	int ret = min_t(unsigned short, w_length, sizeof(struct capability_response));
+	int ret = min_t(unsigned short, w_length, sizeof(struct capability_response)); // @suppress("Symbol is not resolved")
 	memcpy(req->buf, (void *) &response, ret);
 
 	req->zero = 0;
@@ -1585,7 +1586,7 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	tmc->intr_in_queued = false;
 	tmc->abort_bulk_in_complete = false;
 
-	spin_lock_init(&tmc->lock);
+	spin_lock_init(&tmc->lock); // @suppress("Symbol is not resolved")
 	mutex_init(&tmc->io_lock);
 	init_waitqueue_head(&tmc->header_wait);
 	init_waitqueue_head(&tmc->rx_wait);
@@ -2090,5 +2091,5 @@ static struct usb_function_instance *tmc_alloc_instance(void)
 	return &opts->func_inst;
 }
 
-DECLARE_USB_FUNCTION_INIT(tmc, tmc_alloc_instance, tmc_gadget_alloc_func);
+DECLARE_USB_FUNCTION_INIT(tmc, tmc_alloc_instance, tmc_gadget_alloc_func); // @suppress("Unused variable declaration in file scope")
 MODULE_LICENSE("GPL");
