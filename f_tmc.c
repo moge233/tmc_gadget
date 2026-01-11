@@ -19,7 +19,7 @@ static int32_t minor = 0;
 static u8 g_ren = 0;
 static u32 g_status_byte = 0;
 static u8 g_termchar = 0;
-static enum usbtmc_rl_state g_rlstate = LOCS;
+static gadget_tmc488_localremote_state g_rlstate = LOCAL;
 
 static struct usb_endpoint_descriptor tmc_gadget_bulk_in_ep_fs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
@@ -187,7 +187,7 @@ static int tmc_gadget_ioctl_write_rl_state(struct tmc_device *tmc, void __user *
 			return -EFAULT;
 		}
 
-		g_rlstate = (enum usbtmc_rl_state) rlstate_copy;
+		g_rlstate = (gadget_tmc488_localremote_state) rlstate_copy;
 
 		return 0;
 	}
@@ -222,7 +222,7 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 {
 	switch(g_rlstate)
 	{
-		case LOCS:
+		case LOCAL:
 			if (g_ren)
 			{
 				switch(event)
@@ -230,48 +230,48 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 					case TMC_EVENT_INITIATE_CLEAR:
 					case TMC_EVENT_TRIGGER:
 					case TMC_EVENT_DEV_DEP_MSG_OUT:
-						g_rlstate = REMS;
+						g_rlstate = REMOTE;
 						break;
 					case TMC_EVENT_LOCAL_LOCKOUT:
-						g_rlstate = LWLS;
+						g_rlstate = LOCAL_LOCKOUT;
 						break;
 					default:
 						break;
 				}
 			}
 			break;
-		case LWLS:
+		case LOCAL_LOCKOUT:
 			switch(event)
 			{
 				case TMC_EVENT_INITIATE_CLEAR:
 				case TMC_EVENT_TRIGGER:
 				case TMC_EVENT_DEV_DEP_MSG_OUT:
-					g_rlstate = RWLS;
+					g_rlstate = REMOTE_LOCKOUT;
 					break;
 				default:
 					break;
 			}
 			break;
-		case REMS:
+		case REMOTE:
 			switch(event)
 			{
 				case TMC_EVENT_GOTO_LOCAL:
 				case TMC_EVENT_BUS_ACTIVITY:
-					g_rlstate = LOCS;
+					g_rlstate = LOCAL;
 					break;
 				case TMC_EVENT_LOCAL_LOCKOUT:
-					g_rlstate = RWLS;
+					g_rlstate = REMOTE_LOCKOUT;
 					break;
 				default:
 					break;
 			}
 			break;
-		case RWLS:
+		case REMOTE_LOCKOUT:
 			switch(event)
 			{
 				case TMC_EVENT_GOTO_LOCAL:
 				case TMC_EVENT_BUS_ACTIVITY:
-					g_rlstate = LWLS;
+					g_rlstate = LOCAL_LOCKOUT;
 					break;
 				default:
 					break;
@@ -580,13 +580,13 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 
 		if (header_required)
 		{
-			struct usbtmc_header response_header;
+			gadget_tmc_header response_header;
 			memset(&response_header, 0, sizeof(response_header));
 
 			response_header.MsgID = TMC_DEV_DEP_MSG_IN;
 			response_header.bTag = tmc->current_header.bTag;
 			response_header.bTagInverse = tmc->current_header.bTagInverse;
-			if (tmc->current_header.bmTransferAttributes & GADGET_TMC_XFER_ATTRS_TERM_CHAR_ENABLED)
+			if (tmc->current_header.bmTransferAttributes & TMC_XFER_TERM_CHAR_ENABLED)
 			{
 				response_header.TransferSize = len + 1;
 				response_header.TermChar = tmc->current_header.TermChar;
@@ -639,7 +639,7 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 		room_left -= copy_count;
 
 		if ((tmc->current_tx_bytes_remaining == 0) &&
-				(tmc->current_header.bmTransferAttributes & GADGET_TMC_XFER_ATTRS_TERM_CHAR_ENABLED))
+				(tmc->current_header.bmTransferAttributes & TMC_XFER_TERM_CHAR_ENABLED))
 		{
 			if (room_left)
 			{
@@ -1748,40 +1748,40 @@ static int tmc_gadget_function_setup(struct usb_function *f, const struct usb_ct
 
 	switch (ctrl->bRequest)
 	{
-		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_OUT:
+		case GADGET_TMC_REQUEST_INITIATE_ABORT_BULK_OUT:
 			value = tmc_gadget_ctrl_req_initiate_abort_bulk_out(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC_REQ_CHECK_ABORT_BULK_OUT_STATUS:
+		case GADGET_TMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
 			value = tmc_gadget_ctrl_req_check_abort_bulk_out_status(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_IN:
+		case GADGET_TMC_REQUEST_INITIATE_ABORT_BULK_IN:
 			value = tmc_gadget_ctrl_req_initiate_abort_bulk_in(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC_REQ_CHECK_ABORT_BULK_IN_STATUS:
+		case GADGET_TMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
 			value = tmc_gadget_ctrl_req_check_abort_bulk_in_status(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC_REQ_INITIATE_CLEAR:
+		case GADGET_TMC_REQUEST_INITIATE_CLEAR:
 			value = tmc_gadget_ctrl_req_initiate_clear(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC_REQ_CHECK_CLEAR_STATUS:
+		case GADGET_TMC_REQUEST_CHECK_CLEAR_STATUS:
 			value = tmc_gadget_ctrl_req_check_clear_status(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC_REQ_GET_CAPABILITIES:
+		case GADGET_TMC_REQUEST_GET_CAPABILITIES:
 			value = tmc_gadget_ctrl_req_get_capabilities(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC_REQ_INDICATOR_PULSE:
+		case GADGET_TMC_REQUEST_INDICATOR_PULSE:
 			value = tmc_gadget_ctrl_req_indicator_pulse(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC488_REQ_READ_STATUS_BYTE:
+		case GADGET_TMC488_REQUEST_READ_STATUS_BYTE:
 			value = tmc_gadget_ctrl_req_read_status_byte(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC488_REQ_REN_CONTROL:
+		case GADGET_TMC488_REQUEST_REN_CONTROL:
 			value = tmc_gadget_ctrl_req_ren_control(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC488_REQ_GOTO_LOCAL:
+		case GADGET_TMC488_REQUEST_GOTO_LOCAL:
 			value = tmc_gadget_ctrl_req_goto_local(cdev, tmc, ctrl, req);
 			break;
-		case GADGET_TMC488_REQ_LOCAL_LOCKOUT:
+		case GADGET_TMC488_REQUEST_LOCAL_LOCKOUT:
 			value = tmc_gadget_ctrl_req_local_lockout(cdev, tmc, ctrl, req);
 			break;
 		default:
@@ -1815,19 +1815,19 @@ static bool tmc_gadget_function_req_match(struct usb_function *f, const struct u
 
 	switch(ctrl->bRequest)
 	{
-		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_OUT:
-		case GADGET_TMC_REQ_CHECK_ABORT_BULK_OUT_STATUS:
-		case GADGET_TMC_REQ_INITIATE_ABORT_BULK_IN:
-		case GADGET_TMC_REQ_CHECK_ABORT_BULK_IN_STATUS:
-		case GADGET_TMC_REQ_INITIATE_CLEAR:
-		case GADGET_TMC_REQ_CHECK_CLEAR_STATUS:
-		case GADGET_TMC_REQ_GET_CAPABILITIES:
-		case GADGET_TMC_REQ_INDICATOR_PULSE:
+		case GADGET_TMC_REQUEST_INITIATE_ABORT_BULK_OUT:
+		case GADGET_TMC_REQUEST_CHECK_ABORT_BULK_OUT_STATUS:
+		case GADGET_TMC_REQUEST_INITIATE_ABORT_BULK_IN:
+		case GADGET_TMC_REQUEST_CHECK_ABORT_BULK_IN_STATUS:
+		case GADGET_TMC_REQUEST_INITIATE_CLEAR:
+		case GADGET_TMC_REQUEST_CHECK_CLEAR_STATUS:
+		case GADGET_TMC_REQUEST_GET_CAPABILITIES:
+		case GADGET_TMC_REQUEST_INDICATOR_PULSE:
 			/* We are 488-compliant so we must handle the following requests as well */
-		case GADGET_TMC488_REQ_READ_STATUS_BYTE:
-		case GADGET_TMC488_REQ_REN_CONTROL:
-		case GADGET_TMC488_REQ_GOTO_LOCAL:
-		case GADGET_TMC488_REQ_LOCAL_LOCKOUT:
+		case GADGET_TMC488_REQUEST_READ_STATUS_BYTE:
+		case GADGET_TMC488_REQUEST_REN_CONTROL:
+		case GADGET_TMC488_REQUEST_GOTO_LOCAL:
+		case GADGET_TMC488_REQUEST_LOCAL_LOCKOUT:
 			ret = true;
 			break;
 	}
@@ -2185,3 +2185,4 @@ static struct usb_function_instance *tmc_alloc_instance(void)
 
 DECLARE_USB_FUNCTION_INIT(tmc, tmc_alloc_instance, tmc_gadget_alloc_func);
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("USB Test and Measurement class gadget");

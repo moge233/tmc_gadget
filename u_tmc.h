@@ -107,7 +107,7 @@ struct tmc_device {
 	/*
 	 * Message status members
 	 */
-	struct usbtmc_header current_header;
+	gadget_tmc_header current_header;
 	bool new_header_required;
 	bool new_header_available;
 
