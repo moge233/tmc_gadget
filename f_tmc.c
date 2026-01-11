@@ -1634,7 +1634,7 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	tmc->intr_in_queued = false;
 	tmc->abort_bulk_in_complete = false;
 
-	spin_lock_init(&tmc->lock);
+	spin_lock_init(&tmc->lock); // @suppress("Symbol is not resolved")
 	mutex_init(&tmc->io_lock);
 	init_waitqueue_head(&tmc->header_wait);
 	init_waitqueue_head(&tmc->rx_wait);
