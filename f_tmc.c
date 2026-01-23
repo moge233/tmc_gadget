@@ -5,6 +5,8 @@
  *      Author: matt
  */
 
+
+#include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/configfs.h>
 #include <linux/fs.h>
@@ -20,6 +22,7 @@ static u8 g_ren = 0;
 static u32 g_status_byte = 0;
 static u8 g_termchar = 0;
 static gadget_tmc488_localremote_state g_rlstate = LOCAL;
+static const char g_func_name[] = "tmc";
 
 static struct usb_endpoint_descriptor tmc_gadget_bulk_in_ep_fs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
@@ -138,7 +141,7 @@ static struct usb_request *tmc_gadget_req_alloc(struct usb_ep *ep, unsigned len,
 static int tmc_gadget_try_halt_bulk_out_endpoint(struct tmc_device *tmc)
 {
 
-	uint16_t retry_count;
+	u16 retry_count;
 	int err;
 	retry_count = 1000;
 	err = 0;
@@ -156,7 +159,7 @@ static int tmc_gadget_ioctl_write_stb(struct tmc_device *tmc, void __user *arg)
 
 	if (access_ok(arg, sizeof(g_status_byte)))
 	{
-		return copy_from_user(&g_status_byte, (__u32 __user *)arg, sizeof(g_status_byte));
+		return copy_from_user(&g_status_byte, (u32 __user *)arg, sizeof(g_status_byte));
 	}
 
 	return -EFAULT;
@@ -168,7 +171,7 @@ static int tmc_gadget_ioctl_read_stb(struct tmc_device *tmc, void __user *arg)
 
 	if (access_ok(arg, sizeof(g_status_byte)))
 	{
-		return copy_to_user((__u32 __user *)arg, &g_status_byte, sizeof(g_status_byte));
+		return copy_to_user((u32 __user *)arg, &g_status_byte, sizeof(g_status_byte));
 	}
 
 	return -EFAULT;
@@ -180,8 +183,8 @@ static int tmc_gadget_ioctl_write_rl_state(struct tmc_device *tmc, void __user *
 
 	if (access_ok(arg, sizeof(g_rlstate)))
 	{
-		__u32 rlstate_copy = 0;
-		unsigned long err = copy_from_user(&rlstate_copy, (__u32 __user *)arg, sizeof(__u32));
+		u32 rlstate_copy = 0;
+		unsigned long err = copy_from_user(&rlstate_copy, (u32 __user *)arg, sizeof(u32));
 		if (err)
 		{
 			return -EFAULT;
@@ -199,10 +202,10 @@ static int tmc_gadget_ioctl_read_rl_state(struct tmc_device *tmc, void __user *a
 {
 	dev_info(&tmc->dev, "%s: g_rlstate: %d\n", __func__, g_rlstate);
 
-	if (access_ok(arg, sizeof(__u32)))
+	if (access_ok(arg, sizeof(u32)))
 	{
-		__u32 rlstate_copy = (__u32) g_rlstate;
-		return copy_to_user((__u32 __user *) arg, &rlstate_copy, sizeof(__u32));
+		u32 rlstate_copy = (u32) g_rlstate;
+		return copy_to_user((u32 __user *) arg, &rlstate_copy, sizeof(u32));
 	}
 
 	return -EFAULT;
@@ -566,7 +569,7 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 	bool header_required = true;
 
 	tmc->current_tx_bytes_remaining = GADGET_TMC_HEADER_SIZE + len;
-	tmc->current_tx_buf = (uint8_t *)buf;
+	tmc->current_tx_buf = (u8 *)buf;
 
 	req = tmc->bulk_in_req;
 	req->complete = tmc_gadget_bulk_in_req_complete;
@@ -574,7 +577,7 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 	do
 	{
 		size_t adjustment = 0;
-		uint8_t *response_ptr = req->buf;
+		u8 *response_ptr = req->buf;
 		size_t room_left = TMC_GADGET_BULK_ENDPOINT_SIZE;
 		size_t write_count = 0;
 
@@ -703,8 +706,8 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 	if (send_term_char)
 	{
 		// Need to send a term char as its own transfer
-		uint8_t termchar_buffer[] = { g_termchar };
-		memcpy((uint8_t *)req->buf, termchar_buffer, 1);
+		u8 termchar_buffer[] = { g_termchar };
+		memcpy((u8 *)req->buf, termchar_buffer, 1);
 		req->length = 1;
 
 		spin_unlock(&tmc->lock);
@@ -740,7 +743,7 @@ static ssize_t tmc_gadget_fops_read(struct file * file, char __user *buf, size_t
 	struct tmc_device *tmc  = file->private_data;
 	size_t bytes_copied;
 	size_t current_rx_bytes;
-	uint8_t *current_rx_buf;
+	u8 *current_rx_buf;
 	struct usb_request *req;
 	unsigned long flags = 0;
 	size_t size;
@@ -1046,8 +1049,8 @@ static void tmc_gadget_reset_interface(struct tmc_device *tmc)
 static int tmc_gadget_ctrl_req_initiate_clear(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = 0;
-	uint16_t w_length = le16_to_cpu(ctrl->wLength);
-	uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS };
+	u16 w_length = le16_to_cpu(ctrl->wLength);
+	u8 response[] = { GADGET_TMC_STATUS_SUCCESS };
 
 	tmc_gadget_rl_state_machine(tmc, TMC_EVENT_INITIATE_CLEAR);
 
@@ -1125,8 +1128,8 @@ static int tmc_gadget_ctrl_req_check_clear_status(struct usb_composite_dev *cdev
 {
 	// TODO: handle the case where the bulk in FIFO cannot be emptied
 	int ret = 0;
-	uint16_t w_length = le16_to_cpu(ctrl->wLength);
-	uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS, 0 };
+	u16 w_length = le16_to_cpu(ctrl->wLength);
+	u8 response[] = { GADGET_TMC_STATUS_SUCCESS, 0 };
 
 	memcpy(req->buf, (void *) &response, w_length);
 	req->zero = 0;
@@ -1137,7 +1140,7 @@ static int tmc_gadget_ctrl_req_check_clear_status(struct usb_composite_dev *cdev
 
 static int tmc_gadget_ctrl_req_get_capabilities(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	uint16_t w_length = le16_to_cpu(ctrl->wLength);
+	u16 w_length = le16_to_cpu(ctrl->wLength);
 	struct capability_response response;
 
 	memset(&response, 0, sizeof(struct capability_response));
@@ -1170,8 +1173,8 @@ static int tmc_gadget_ctrl_req_indicator_pulse(struct usb_composite_dev *cdev, s
 
 	if (tmc->device_capabilities.bmUSBTMCInterfaceCapabilities & GADGET_TMC_CAPABILITY_INDICATOR_PULSE)
 	{
-		uint16_t w_length = le16_to_cpu(ctrl->wLength);
-		uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS };
+		u16 w_length = le16_to_cpu(ctrl->wLength);
+		u8 response[] = { GADGET_TMC_STATUS_SUCCESS };
 
 		memcpy(req->buf, (void *) &response, w_length);
 		req->zero = 0;
@@ -1192,16 +1195,16 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 {
 	struct status_byte_response response;
 	int ret = 0;
-	uint16_t w_value = le16_to_cpu(ctrl->wValue);
-	uint16_t w_length = le16_to_cpu(ctrl->wLength);
+	u16 w_value = le16_to_cpu(ctrl->wValue);
+	u16 w_length = le16_to_cpu(ctrl->wLength);
 
 	// Attempt to send the status byte via the interrupt endpoint
 	// per USBTMC 4.3.1.2
 	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & GADGET_TMC488_CAPABILITY_SR1)
 	{
 		// USBTMC/USB488 3.4.2 Table 7
-		response.tag = (uint8_t) (USB_DIR_IN | (0x7F & w_value));
-		response.status_byte = (__u8) g_status_byte;
+		response.tag = (u8) (USB_DIR_IN | (0x7F & w_value));
+		response.status_byte = (u8) g_status_byte;
 
 		ret = sizeof(response);
 
@@ -1220,7 +1223,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 			// Handle the control endpoint now
 			struct status_response status;
 			status.USBTMC_status = GADGET_TMC_STATUS_SUCCESS;
-			status.tag = (uint8_t) w_value;
+			status.tag = (u8) w_value;
 			status.status_byte = g_status_byte;
 
 			ret = w_length;
@@ -1238,7 +1241,7 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 		// per USBTMC 4.3.1.1
 		struct status_response status;
 		status.USBTMC_status = GADGET_TMC_STATUS_SUCCESS;
-		status.tag = (uint8_t) w_value;
+		status.tag = (u8) w_value;
 		status.status_byte = g_status_byte;
 
 		ret = w_length;
@@ -1254,10 +1257,10 @@ static int tmc_gadget_ctrl_req_read_status_byte(struct usb_composite_dev *cdev, 
 
 static int tmc_gadget_ctrl_req_ren_control(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
-	uint8_t response[] = { GADGET_TMC_STATUS_SUCCESS };
+	u8 response[] = { GADGET_TMC_STATUS_SUCCESS };
 	int ret = 0;
-	uint16_t w_value = le16_to_cpu(ctrl->wValue);
-	uint16_t w_length = le16_to_cpu(ctrl->wLength);
+	u16 w_value = le16_to_cpu(ctrl->wValue);
+	u16 w_length = le16_to_cpu(ctrl->wLength);
 
 	if (tmc->device_capabilities.bmUSB488DeviceCapabilities & GADGET_TMC488_CAPABILITY_REN_CONTROL)
 	{
@@ -1307,9 +1310,9 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev *
 {
 	int ret = 0;
 	int status = 0;
-	uint8_t current_tag = tmc->current_header.bTag;
-	uint8_t bulk_in_tag = ctrl->wValue & 0xFF;
-	uint8_t response[2] = { 0 };
+	u8 current_tag = tmc->current_header.bTag;
+	u8 bulk_in_tag = ctrl->wValue & 0xFF;
+	u8 response[2] = { 0 };
 
 	if (current_tag == bulk_in_tag)
 	{
@@ -1382,7 +1385,7 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_in(struct usb_composite_dev *
 static int tmc_gadget_ctrl_req_check_abort_bulk_in_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = 0;
-	uint8_t response[8] = { 0 };
+	u8 response[8] = { 0 };
 
 	if (tmc->abort_bulk_in_complete)
 	{
@@ -1408,9 +1411,9 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_out(struct usb_composite_dev 
 {
 	int ret = 0;
 	int status = 0;
-	uint8_t current_tag = tmc->current_header.bTag;
-	uint8_t bulk_out_tag = ctrl->wValue & 0xFF;
-	uint8_t response[2] = { 0 };
+	u8 current_tag = tmc->current_header.bTag;
+	u8 bulk_out_tag = ctrl->wValue & 0xFF;
+	u8 response[2] = { 0 };
 
 	tmc->new_header_required = true;
 	tmc->current_rx_bytes_remaining = 0;
@@ -1468,7 +1471,7 @@ static int tmc_gadget_ctrl_req_initiate_abort_bulk_out(struct usb_composite_dev 
 static int tmc_gadget_ctrl_req_check_abort_bulk_out_status(struct usb_composite_dev *cdev, struct tmc_device *tmc, const struct usb_ctrlrequest *ctrl, struct usb_request *req)
 {
 	int ret = 0;
-	uint8_t response[8] = { 0 };
+	u8 response[8] = { 0 };
 
 	response[0] = GADGET_TMC_STATUS_SUCCESS;
 	response[4] = cpu_to_le32(0);
@@ -1742,9 +1745,9 @@ static int tmc_gadget_function_setup(struct usb_function *f, const struct usb_ct
 	struct usb_composite_dev *cdev = f->config->cdev;
 	struct usb_request	*req = cdev->req;
 	int value = -EOPNOTSUPP;
-	uint16_t w_index = le16_to_cpu(ctrl->wIndex);
-	uint16_t w_value = le16_to_cpu(ctrl->wValue);
-	uint16_t w_length = le16_to_cpu(ctrl->wLength);
+	u16 w_index = le16_to_cpu(ctrl->wIndex);
+	u16 w_value = le16_to_cpu(ctrl->wValue);
+	u16 w_length = le16_to_cpu(ctrl->wLength);
 
 	switch (ctrl->bRequest)
 	{
@@ -1864,7 +1867,7 @@ static ssize_t f_tmc_bcdUSBTMC_store(struct config_item *item, const char *page,
 {
 	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
 	int result;
-	uint16_t num;
+	u16 num;
 
 	mutex_lock(&opts->io_lock);
 	result = kstrtou16(page, 0, &num);
@@ -1900,7 +1903,7 @@ static ssize_t f_tmc_bmUSBTMCInterfaceCapabilities_store(struct config_item *ite
 {
 	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
 	int result;
-	uint8_t num;
+	u8 num;
 
 	mutex_lock(&opts->io_lock);
 	result = kstrtou8(page, 0, &num);
@@ -1936,7 +1939,7 @@ static ssize_t f_tmc_bmUSBTMCDeviceCapabilities_store(struct config_item *item, 
 {
 	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
 	int result;
-	uint8_t num;
+	u8 num;
 
 	mutex_lock(&opts->io_lock);
 	result = kstrtou8(page, 0, &num);
@@ -1972,7 +1975,7 @@ static ssize_t f_tmc_bcdUSB488_store(struct config_item *item, const char *page,
 {
 	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
 	int result;
-	uint16_t num;
+	u16 num;
 
 	mutex_lock(&opts->io_lock);
 	result = kstrtou16(page, 0, &num);
@@ -2008,7 +2011,7 @@ static ssize_t f_tmc_bmUSB488InterfaceCapabilities_store(struct config_item *ite
 {
 	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
 	int result;
-	uint8_t num;
+	u8 num;
 
 	mutex_lock(&opts->io_lock);
 	result = kstrtou8(page, 0, &num);
@@ -2044,7 +2047,7 @@ static ssize_t f_tmc_bmUSB488DeviceCapabilities_store(struct config_item *item, 
 {
 	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
 	int result;
-	uint8_t num;
+	u8 num;
 
 	mutex_lock(&opts->io_lock);
 	result = kstrtou8(page, 0, &num);
@@ -2080,7 +2083,7 @@ static ssize_t f_tmc_REN_store(struct config_item *item, const char *page, size_
 {
 	struct f_tmc_opts *opts = tmc_gadget_config_item_to_f_tmc_opts(item);
 	int result;
-	uint8_t num;
+	u8 num;
 
 	mutex_lock(&opts->io_lock);
 	result = kstrtou8(page, 0, &num);
@@ -2126,7 +2129,7 @@ static struct usb_function *tmc_gadget_alloc_func(struct usb_function_instance *
 	}
 
 	/* Register the function. */
-	tmc->func.name = "tmc";
+	tmc->func.name = g_func_name;
 	tmc->func.strings = tmc_gadget_strings;
 	tmc->func.bind = tmc_gadget_function_bind;
 	tmc->func.unbind = tmc_gadget_function_unbind;
