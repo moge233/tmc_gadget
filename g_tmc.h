@@ -22,6 +22,8 @@
 #ifndef __LINUX_USB_G_TMC_H
 #define __LINUX_USB_G_TMC_H
 
+#include <linux/types.h>
+
 typedef enum
 {
 	LOCAL,			// LOCS
@@ -32,13 +34,13 @@ typedef enum
 
 typedef struct
 {
-	__u8 MsgID;
-	__u8 bTag;
-	__u8 bTagInverse;
-	__u8 __reserved;
-	__u32 TransferSize;
-	__u8 bmTransferAttributes;
-	__u8 TermChar;
+	u8 MsgID;
+	u8 bTag;
+	u8 bTagInverse;
+	u8 __reserved;
+	u32 TransferSize;
+	u8 bmTransferAttributes;
+	u8 TermChar;
 } gadget_tmc_header;
 #define GADGET_TMC_HEADER_SIZE sizeof(gadget_tmc_header)
 
