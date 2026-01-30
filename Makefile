@@ -13,7 +13,8 @@ all:
 	mv -f *.symvers symvers && \
 	mv -f *.order   order
 
-	
 .PHONY: clean
 clean:
+	rm -r ./kobj/* ./obj/* ./mod/* ./symvers/* ./order/*
 	make -C $(KERNEL_DIR) ARCH=arm64 CROSS_COMPILE=aarch64-buildroot-linux-gnu- M=$(PWD) clean
+
