@@ -26,10 +26,10 @@
 
 typedef enum
 {
-	LOCAL,			// LOCS
-	LOCAL_LOCKOUT,	// LWLS
-	REMOTE,			// REMS
-	REMOTE_LOCKOUT,	// RWLS
+	RL_STATE_LOCAL,				// LOCS
+	RL_STATE_LOCAL_LOCKOUT,		// LWLS
+	RL_STATE_REMOTE,			// REMS
+	RL_STATE_REMOTE_LOCKOUT,	// RWLS
 } gadget_tmc488_localremote_state;
 
 typedef struct

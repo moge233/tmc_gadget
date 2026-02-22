@@ -21,8 +21,10 @@ static int32_t minor = 0;
 static u8 g_ren = 0;
 static u32 g_status_byte = 0;
 static u8 g_termchar = 0;
-static gadget_tmc488_localremote_state g_rlstate = LOCAL;
+static gadget_tmc488_localremote_state g_rlstate = RL_STATE_LOCAL;
 static const char g_func_name[] = "tmc";
+static const char g_event_connect[] = "EVENT=connect";
+static const char g_event_disconnect[] = "EVENT=disconnect";
 
 static struct usb_endpoint_descriptor tmc_gadget_bulk_in_ep_fs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
@@ -65,26 +67,30 @@ static struct usb_descriptor_header *tmc_gadget_descriptors_fs[] = {
 		NULL
 };
 
+#define USB_TMC_GADGET_DEFAULT_BULK_ENDPOINT_SIZE			512
+#define USB_TMC_GADGET_DEFAULT_INTERRUPT_ENDPOINT_SIZE		16
+#define USB_TMC_GADGET_DEFUALT_INTERRUPT_INTERVAL			1
+
 static struct usb_endpoint_descriptor tmc_gadget_bulk_in_ep_hs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType	= USB_DT_ENDPOINT,
 	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
-	.wMaxPacketSize		= cpu_to_le16(512),
+	.wMaxPacketSize		= cpu_to_le16(USB_TMC_GADGET_DEFAULT_BULK_ENDPOINT_SIZE),
 };
 
 static struct usb_endpoint_descriptor tmc_gadget_bulk_out_ep_hs = {
 	.bLength		= USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType	= USB_DT_ENDPOINT,
 	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
-	.wMaxPacketSize		= cpu_to_le16(512),
+	.wMaxPacketSize		= cpu_to_le16(USB_TMC_GADGET_DEFAULT_BULK_ENDPOINT_SIZE),
 };
 
 static struct usb_endpoint_descriptor tmc_gadget_interrupt_ep_hs = {
 	.bLength			= USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType	= USB_DT_ENDPOINT,
 	.bmAttributes		= USB_ENDPOINT_XFER_INT,
-	.wMaxPacketSize		= cpu_to_le16(16),
-	.bInterval			= 1,
+	.wMaxPacketSize		= cpu_to_le16(USB_TMC_GADGET_DEFAULT_INTERRUPT_ENDPOINT_SIZE),
+	.bInterval			= USB_TMC_GADGET_DEFUALT_INTERRUPT_INTERVAL,
 };
 
 static struct usb_descriptor_header *tmc_gadget_descriptors_hs[] = {
@@ -217,7 +223,7 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 {
 	switch(g_rlstate)
 	{
-		case LOCAL:
+		case RL_STATE_LOCAL:
 			if (g_ren)
 			{
 				switch(event)
@@ -225,48 +231,48 @@ static int tmc_gadget_rl_state_machine(struct tmc_device *tmc, enum tmc_gadget_r
 					case TMC_EVENT_INITIATE_CLEAR:
 					case TMC_EVENT_TRIGGER:
 					case TMC_EVENT_DEV_DEP_MSG_OUT:
-						g_rlstate = REMOTE;
+						g_rlstate = RL_STATE_REMOTE;
 						break;
 					case TMC_EVENT_LOCAL_LOCKOUT:
-						g_rlstate = LOCAL_LOCKOUT;
+						g_rlstate = RL_STATE_LOCAL_LOCKOUT;
 						break;
 					default:
 						break;
 				}
 			}
 			break;
-		case LOCAL_LOCKOUT:
+		case RL_STATE_LOCAL_LOCKOUT:
 			switch(event)
 			{
 				case TMC_EVENT_INITIATE_CLEAR:
 				case TMC_EVENT_TRIGGER:
 				case TMC_EVENT_DEV_DEP_MSG_OUT:
-					g_rlstate = REMOTE_LOCKOUT;
+					g_rlstate = RL_STATE_REMOTE_LOCKOUT;
 					break;
 				default:
 					break;
 			}
 			break;
-		case REMOTE:
+		case RL_STATE_REMOTE:
 			switch(event)
 			{
 				case TMC_EVENT_GOTO_LOCAL:
 				case TMC_EVENT_BUS_ACTIVITY:
-					g_rlstate = LOCAL;
+					g_rlstate = RL_STATE_LOCAL;
 					break;
 				case TMC_EVENT_LOCAL_LOCKOUT:
-					g_rlstate = REMOTE_LOCKOUT;
+					g_rlstate = RL_STATE_REMOTE_LOCKOUT;
 					break;
 				default:
 					break;
 			}
 			break;
-		case REMOTE_LOCKOUT:
+		case RL_STATE_REMOTE_LOCKOUT:
 			switch(event)
 			{
 				case TMC_EVENT_GOTO_LOCAL:
 				case TMC_EVENT_BUS_ACTIVITY:
-					g_rlstate = LOCAL_LOCKOUT;
+					g_rlstate = RL_STATE_LOCAL_LOCKOUT;
 					break;
 				default:
 					break;
@@ -282,6 +288,8 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 	struct tmc_device *tmc = (struct tmc_device *)ep->driver_data;
 	int status = req->status;
 	unsigned long flags = 0;
+
+	dev_dbg(&tmc->dev, "%s called with status %d\n", __func__, status); // @suppress("Symbol is not resolved")
 
 	spin_lock_irqsave(&tmc->lock, flags);
 
@@ -330,6 +338,7 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 
 						if (tmc->new_header_required)
 						{
+							dev_dbg(&tmc->dev, "%s: %d\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 							wake_up(&tmc->header_wait);
 						}
 					}
@@ -387,35 +396,67 @@ static void tmc_gadget_bulk_out_req_complete(struct usb_ep *ep, struct usb_reque
 			{
 				tmc->rx_complete = false;
 			}
+			wake_up_interruptible(&tmc->rx_wait);
 			break;
 		case -ECONNRESET:
-			tmc->new_header_required = true;
-			tmc->rx_complete = false;
 			tmc->connection_reset = true;
+
+			if (tmc->bulk_out_queued)
+			{
+				dev_dbg(&tmc->dev, "%s: bulk_out_queued\n", __func__); // @suppress("Symbol is not resolved")
+				usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req);
+				tmc->bulk_out_queued = false;
+				tmc->rx_complete = false;
+			}
+
+			if (tmc->bulk_in_queued)
+			{
+				dev_dbg(&tmc->dev, "%s: bulk_in_queued\n", __func__); // @suppress("Symbol is not resolved")
+				usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_in_req);
+				tmc->bulk_in_queued = false;
+				tmc->tx_pending = false;
+			}
+
+			if (tmc->intr_in_queued)
+			{
+				dev_dbg(&tmc->dev, "%s: intr_in_queued\n", __func__); // @suppress("Symbol is not resolved")
+				usb_ep_dequeue(tmc->interrupt_ep, tmc->interrupt_req);
+				tmc->intr_in_queued = false;
+			}
+
+			tmc->current_rx_buf = NULL;
+			tmc->current_rx_bytes = 0;
+			tmc->current_rx_bytes_remaining = 0;
+			tmc->current_tx_buf = NULL;
+			tmc->current_tx_bytes = 0;
+			tmc->current_tx_bytes_remaining = 0;
+			memset(&tmc->current_header, 0, GADGET_TMC_HEADER_SIZE);
+			tmc->new_header_required = true;
+			tmc->new_header_available = false;
+
+			init_waitqueue_head(&tmc->connection_wait);
+
+			dev_dbg(&tmc->dev, "%s: %d\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 			wake_up(&tmc->header_wait);
 			break;
 		case -ESHUTDOWN:
-			tmc->new_header_required = true;
-			tmc->rx_complete = false;
-			tmc->connection_reset = true;
-			wake_up(&tmc->header_wait);
+			tmc->is_shutdown = true;
+			dev_dbg(&tmc->dev, "%s: %d\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 			break;
 		case -ECONNABORTED:
-			wake_up(&tmc->header_wait);
+			dev_dbg(&tmc->dev, "%s: %d\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 			break;
 		case -EOVERFLOW:
-			wake_up(&tmc->header_wait);
+			dev_dbg(&tmc->dev, "%s: %d\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 			break;
 		case -EPIPE:
-			wake_up(&tmc->header_wait);
+			dev_dbg(&tmc->dev, "%s: %d\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 			break;
 		default:
-			wake_up(&tmc->header_wait);
 			dev_err(&tmc->dev, "%s: default, status: %d\n", __func__, status);
 			break;
 	}
 
-	wake_up_interruptible(&tmc->rx_wait);
 	spin_unlock_irqrestore(&tmc->lock, flags);
 
 	return;
@@ -466,6 +507,11 @@ static int tmc_gadget_setup_bulk_out_req(struct tmc_device *tmc)
 	{
 		dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 		return -EBUSY;
+	}
+	else if (tmc->is_shutdown)
+	{
+		dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
+		return -ENODEV;
 	}
 
 	req = tmc->bulk_out_req;
@@ -537,6 +583,7 @@ static int tmc_gadget_fops_open(struct inode *inode, struct file *file)
 		init_waitqueue_head(&tmc->header_wait);
 		init_waitqueue_head(&tmc->rx_wait);
 		init_waitqueue_head(&tmc->tx_wait);
+		init_waitqueue_head(&tmc->connection_wait);
 	}
 
 	dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
@@ -953,22 +1000,42 @@ static __poll_t tmc_gadget_fops_poll(struct file *file, struct poll_table_struct
 
 	mutex_lock(&tmc->io_lock);
 	spin_lock_irqsave(&tmc->lock, flags);
+
+	if (tmc->is_shutdown)
+	{
+		spin_unlock_irqrestore(&tmc->lock, flags);
+		mutex_unlock(&tmc->io_lock);
+
+		wait_event_interruptible(tmc->connection_wait, tmc->is_shutdown == false); // @suppress("Type cannot be resolved")
+		dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
+	}
+	else if (tmc->connection_reset)
+	{
+		spin_unlock_irqrestore(&tmc->lock, flags);
+		mutex_unlock(&tmc->io_lock);
+
+		wait_event_interruptible(tmc->connection_wait, tmc->connection_reset == false); // @suppress("Type cannot be resolved")
+		dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
+	}
+
 	if (!tmc->current_rx_bytes_remaining && !tmc->new_header_available)
 	{
+		dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 		if (tmc_gadget_setup_bulk_out_req(tmc))
 		{
 			dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 
 			spin_unlock_irqrestore(&tmc->lock, flags);
 			mutex_unlock(&tmc->io_lock);
+			ret = EPOLLERR;
 			return ret;
 		}
 	}
-
 	spin_unlock_irqrestore(&tmc->lock, flags);
 	mutex_unlock(&tmc->io_lock);
 
 	poll_wait(file, &tmc->header_wait, wait);
+	dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 
 	if (tmc->new_header_available)
 	{
@@ -976,6 +1043,21 @@ static __poll_t tmc_gadget_fops_poll(struct file *file, struct poll_table_struct
 
 		tmc->new_header_available = false;
 		ret |= EPOLLIN;
+	}
+	else
+	{
+		// It's possible we got here from a CONNRESET in the bulk out req complete function
+		dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
+		if (tmc->connection_reset)
+		{
+			dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
+			ret |= EPOLLERR;
+		}
+		else
+		{
+			dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
+			ret = 0;
+		}
 	}
 
 	return ret;
@@ -1042,8 +1124,10 @@ static const struct class tmc_class = {
 	.name = "tmc",
 };
 
-static int tmc_gadget_set_interface(struct tmc_device *tmc)
+static int tmc_gadget_set_interface(struct tmc_device *tmc, unsigned interface)
 {
+	dev_dbg(&tmc->dev, "%s called\n", __func__); // @suppress("Symbol is not resolved")
+
 	int result = 0;
 
 	tmc->bulk_in_ep->desc = tmc_gadget_get_ep_descriptor(tmc->gadget, &tmc_gadget_bulk_in_ep_fs, &tmc_gadget_bulk_in_ep_hs, NULL);
@@ -1089,6 +1173,8 @@ static int tmc_gadget_set_interface(struct tmc_device *tmc)
 	}
 
 	tmc->is_shutdown = false;
+	tmc->connection_reset = false;
+	tmc->interface = interface;
 
 	return result;
 }
@@ -1096,6 +1182,8 @@ static int tmc_gadget_set_interface(struct tmc_device *tmc)
 static void tmc_gadget_reset_interface(struct tmc_device *tmc)
 {
 	unsigned long flags;
+	spin_lock_irqsave(&tmc->lock, flags);
+	dev_dbg(&tmc->dev, "%s called\n", __func__); // @suppress("Symbol is not resolved")
 
 	if (tmc->interface < 0)
 	{
@@ -1117,12 +1205,13 @@ static void tmc_gadget_reset_interface(struct tmc_device *tmc)
 		usb_ep_disable(tmc->interrupt_ep);
 	}
 
-	spin_lock_irqsave(&tmc->lock, flags);
 	tmc->bulk_in_ep->desc = NULL;
 	tmc->bulk_out_ep->desc = NULL;
 	tmc->interrupt_ep->desc = NULL;
 	tmc->interface = -1;
-	tmc->is_shutdown = true;
+	tmc->is_shutdown = false;
+	tmc->is_suspended = false;
+	tmc->connection_reset = false;
 	spin_unlock_irqrestore(&tmc->lock, flags);
 }
 
@@ -1574,6 +1663,56 @@ static void tmc_gadget_device_release(struct device *dev)
 	return;
 }
 
+static void tmc_device_init(struct tmc_device *tmc)
+{
+
+	tmc->interface = -1;
+	tmc->is_shutdown = true;
+	tmc->is_suspended = false;
+	tmc->connection_reset = false;
+
+	/*
+	 * Get TMC/488 capabilities from ConfigFS
+	 * These are user-configured values because the device using the driver may or may not
+	 * have certain features. This allows a user to configure the driver to suit their device.
+	 */
+	tmc->device_capabilities.bcdUSBTMC = 0;
+	tmc->device_capabilities.bmUSBTMCInterfaceCapabilities = 0;
+	tmc->device_capabilities.bmUSBTMCDeviceCapabilities = 0;
+	tmc->device_capabilities.bcdUSB488 = 0;
+	tmc->device_capabilities.bmUSB488InterfaceCapabilities = 0;
+	tmc->device_capabilities.bmUSB488DeviceCapabilities = 0;
+
+	memset(&tmc->current_header, 0, sizeof(tmc->current_header));
+	tmc->new_header_required = true;
+	tmc->new_header_available = false;
+
+	tmc->current_rx_bytes = 0;
+	tmc->current_rx_bytes_remaining = 0;
+	tmc->current_rx_buf = NULL;
+
+	tmc->current_tx_bytes = 0;
+	tmc->current_tx_bytes_remaining = 0;
+	tmc->current_tx_buf = NULL;
+
+	tmc->previous_bulk_out_tag = 0;
+	tmc->previous_bulk_in_tag = 0;
+
+	tmc->bulk_out_queued = false;
+	tmc->bulk_in_queued = false;
+	tmc->intr_in_queued = false;
+	tmc->abort_bulk_in_complete = false;
+
+	spin_lock_init(&tmc->lock);
+	mutex_init(&tmc->io_lock);
+	init_waitqueue_head(&tmc->header_wait);
+	init_waitqueue_head(&tmc->rx_wait);
+	init_waitqueue_head(&tmc->tx_wait);
+	init_waitqueue_head(&tmc->connection_wait);
+	tmc->rx_complete = false;
+	tmc->tx_pending = false;
+}
+
 static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb_function *func)
 {
 	struct f_tmc_opts *opts;
@@ -1678,12 +1817,11 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	ret = cdev_device_add(&tmc->cdev, &tmc->dev);
 	if (ret)
 	{
+		dev_err(&tmc->dev, "could not add cdev");
 		goto ERROR_CDEV_DEVICE_ADD_FAIL;
 	}
 
-	tmc->interface = 0;
-	tmc->is_shutdown = true;
-	tmc->connection_reset = false;
+	tmc_device_init(tmc);
 
 	/*
 	 * Get TMC/488 capabilities from ConfigFS
@@ -1697,35 +1835,9 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	tmc->device_capabilities.bmUSB488InterfaceCapabilities = opts->bmInterfaceCapabilities488;
 	tmc->device_capabilities.bmUSB488DeviceCapabilities = opts->bmDeviceCapabilities488;
 
-	memset(&tmc->current_header, 0, sizeof(tmc->current_header));
-	tmc->new_header_required = true;
-	tmc->new_header_available = false;
-
-	tmc->current_rx_bytes = 0;
-	tmc->current_rx_bytes_remaining = 0;
-	tmc->current_rx_buf = NULL;
-
-	tmc->current_tx_bytes = 0;
-	tmc->current_tx_bytes_remaining = 0;
-	tmc->current_tx_buf = NULL;
-
-	tmc->previous_bulk_out_tag = 0;
-	tmc->previous_bulk_in_tag = 0;
-
-	tmc->bulk_out_queued = false;
-	tmc->bulk_in_queued = false;
-	tmc->intr_in_queued = false;
-	tmc->abort_bulk_in_complete = false;
-
-	spin_lock_init(&tmc->lock); // @suppress("Symbol is not resolved")
-	mutex_init(&tmc->io_lock);
-	init_waitqueue_head(&tmc->header_wait);
-	init_waitqueue_head(&tmc->rx_wait);
-	init_waitqueue_head(&tmc->tx_wait);
-	tmc->rx_complete = false;
-	tmc->tx_pending = false;
-
 	opts->tmc = tmc;
+
+	dev_dbg(&tmc->dev, "tmc successfully bound\n"); // @suppress("Symbol is not resolved")
 
 	if (tmc->device_capabilities.bmUSBTMCInterfaceCapabilities & GADGET_TMC_CAPABILITY_INDICATOR_PULSE)
 	{
@@ -1791,23 +1903,29 @@ static void tmc_gadget_function_unbind(struct usb_configuration *config, struct 
 static int tmc_gadget_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 {
 	struct tmc_device *tmc = tmc_gadget_function_to_tmc_device(f);
+
+	dev_dbg(&tmc->dev, "%s called with interface = %u and alt = %u\n", __func__, interface, alt); // @suppress("Symbol is not resolved")
+
 	int ret = -ENOTSUPP;
 
+	// alt should be 0
 	if (!alt)
 	{
-		/* Free the current interface */
-		tmc_gadget_reset_interface(tmc);
-
-		ret = tmc_gadget_set_interface(tmc);
+		ret = tmc_gadget_set_interface(tmc, interface);
 		if (ret)
 		{
 			tmc_gadget_reset_interface(tmc);
-		}
-		else
-		{
-			tmc->interface = interface;
+
+			return ret;
 		}
 	}
+
+	dev_dbg(&tmc->dev, "%s: %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
+
+	char *envp[] = {(char *)g_event_connect, NULL};
+	kobject_uevent_env(&tmc->dev.kobj, KOBJ_CHANGE, envp);
+
+	wake_up(&tmc->connection_wait);
 
 	return ret;
 }
@@ -1877,11 +1995,47 @@ static int tmc_gadget_function_setup(struct usb_function *f, const struct usb_ct
 
 static void tmc_gadget_function_suspend(struct usb_function *f)
 {
+	struct tmc_device *tmc = tmc_gadget_function_to_tmc_device(f);
+
+	dev_dbg(&tmc->dev, "%s called\n", __func__); // @suppress("Symbol is not resolved")
+
+	if (tmc->bulk_out_queued)
+	{
+		dev_dbg(&tmc->dev, "---- there's a bulk out req queued\n"); // @suppress("Symbol is not resolved")
+		usb_ep_dequeue(tmc->bulk_out_ep, tmc->bulk_out_req);
+		tmc->bulk_out_queued = false;
+	}
+
+	if (tmc->bulk_in_queued)
+	{
+		dev_dbg(&tmc->dev, "---- there's a bulk in req queued\n"); // @suppress("Symbol is not resolved")
+		usb_ep_dequeue(tmc->bulk_in_ep, tmc->bulk_in_req);
+		tmc->bulk_in_queued = false;
+	}
+
+	if (tmc->intr_in_queued)
+	{
+		dev_dbg(&tmc->dev, "---- there's a bulk in req queued\n"); // @suppress("Symbol is not resolved")
+		usb_ep_dequeue(tmc->interrupt_ep, tmc->interrupt_req);
+		tmc->intr_in_queued = false;
+	}
+
+	tmc->is_suspended = true;
+
+	char *envp[] = {(char *)g_event_disconnect, NULL};
+	kobject_uevent_env(&tmc->dev.kobj, KOBJ_CHANGE, envp);
+
 	return;
 }
 
 static void tmc_gadget_function_resume(struct usb_function *f)
 {
+	struct tmc_device *tmc = tmc_gadget_function_to_tmc_device(f);
+
+	dev_dbg(&tmc->dev, "%s called\n", __func__); // @suppress("Symbol is not resolved")
+
+	tmc->is_suspended = false;
+
 	return;
 }
 

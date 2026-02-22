@@ -97,6 +97,7 @@ struct tmc_device {
 	 */
 	__s8 interface;
 	bool is_shutdown;
+	bool is_suspended;
 	bool connection_reset;
 
 	/*
@@ -131,10 +132,11 @@ struct tmc_device {
 	 * Synchronization members
 	 */
 	spinlock_t lock;						/* Lock this structure */
-	struct mutex io_lock;				/* Lock during read/write calls */
+	struct mutex io_lock;					/* Lock during read/write calls */
 	wait_queue_head_t header_wait;			/* Wait until there is a new header available */
 	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
 	wait_queue_head_t tx_wait;				/* Wait until we can write. */
+	wait_queue_head_t connection_wait;		/* Wait until we connect to a host. */
 	bool rx_complete;
 	bool tx_pending;
 
