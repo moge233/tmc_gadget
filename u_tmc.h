@@ -99,6 +99,10 @@ struct tmc_device {
 	bool is_shutdown;
 	bool is_suspended;
 	bool connection_reset;
+	gadget_tmc488_localremote_state remote_local_state;
+	__u8 term_char;
+	__u32 status_byte;
+	__u32 ren;
 
 	/*
 	 * TMC device capabilities

@@ -34,13 +34,13 @@ typedef enum
 
 typedef struct
 {
-	u8 MsgID;
-	u8 bTag;
-	u8 bTagInverse;
-	u8 __reserved;
-	u32 TransferSize;
-	u8 bmTransferAttributes;
-	u8 TermChar;
+	__u8 MsgID;
+	__u8 bTag;
+	__u8 bTagInverse;
+	__u8 __reserved;
+	__u32 TransferSize;
+	__u8 bmTransferAttributes;
+	__u8 TermChar;
 } gadget_tmc_header;
 #define GADGET_TMC_HEADER_SIZE sizeof(gadget_tmc_header)
 
@@ -88,12 +88,14 @@ typedef struct
  * Don't add any colliding codes to either driver, and keep
  * them in unique ranges (size 0x60 for now).
  */
-#define GADGET_TMC_IOCTL_ABORT_BULK_OUT		_IOW('g', 0x61, unsigned char)
-#define GADGET_TMC_IOCTL_ABORT_BULK_IN		_IOW('g', 0x62, unsigned char)
-#define GADGET_TMC488_IOCTL_GET_STB			_IOR('g', 0x63, unsigned char)
-#define GADGET_TMC488_IOCTL_SET_STB			_IOW('g', 0x64, unsigned char)
-#define GADGET_TMC488_IOCTL_GET_RL_STATE	_IOR('g', 0x65, unsigned char)
-#define GADGET_TMC488_IOCTL_SET_RL_STATE	_IOW('g', 0x66, unsigned char)
+#define GADGET_TMC_IOCTL_ABORT_BULK_OUT		_IO('g', 0x61)
+#define GADGET_TMC_IOCTL_ABORT_BULK_IN		_IO('g', 0x62)
+#define GADGET_TMC488_IOCTL_GET_STB			_IOR('g', 0x63, __u8)
+#define GADGET_TMC488_IOCTL_SET_STB			_IOW('g', 0x64, __u8)
+#define GADGET_TMC488_IOCTL_GET_RL_STATE	_IOR('g', 0x65, __u8)
+#define GADGET_TMC488_IOCTL_SET_RL_STATE	_IOW('g', 0x66, __u8)
 #define GADGET_TMC_IOCTL_GET_HEADER			_IOR('g', 0x67, gadget_tmc_header)
+#define GADGET_TMC488_IOCTL_GET_REN			_IOR('g', 0x68, __u8)
+#define GADGET_TMC488_IOCTL_SET_REN			_IOW('g', 0x69, __u8)
 
 #endif /* __LINUX_USB_G_PRINTER_H */
