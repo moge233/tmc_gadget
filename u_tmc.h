@@ -161,9 +161,7 @@ struct tmc_device {
 
 struct f_tmc_opts {
 	struct usb_function_instance func_inst;
-	unsigned int interface;
 	struct mutex io_lock;
-	struct tmc_device *tmc;
 
 	/* TMC Capabilities */
 	/* Section 4.2.1.8 of USB TMC Specification Revision 1.0*/

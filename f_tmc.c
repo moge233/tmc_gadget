@@ -1892,8 +1892,6 @@ static int tmc_gadget_function_bind(struct usb_configuration *config, struct usb
 	tmc->device_capabilities.bmUSB488InterfaceCapabilities = opts->bmInterfaceCapabilities488;
 	tmc->device_capabilities.bmUSB488DeviceCapabilities = opts->bmDeviceCapabilities488;
 
-	opts->tmc = tmc;
-
 	dev_dbg(&tmc->dev, "tmc successfully bound\n"); // @suppress("Symbol is not resolved")
 
 	if (tmc->device_capabilities.bmUSBTMCInterfaceCapabilities & GADGET_TMC_CAPABILITY_INDICATOR_PULSE)
