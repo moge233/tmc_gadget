@@ -97,7 +97,12 @@ struct tmc_device {
 	 */
 	__s8 interface;
 	bool is_shutdown;
+	bool is_suspended;
 	bool connection_reset;
+	gadget_tmc488_localremote_state remote_local_state;
+	__u8 term_char;
+	__u32 status_byte;
+	__u32 ren;
 
 	/*
 	 * TMC device capabilities
@@ -131,10 +136,11 @@ struct tmc_device {
 	 * Synchronization members
 	 */
 	spinlock_t lock;						/* Lock this structure */
-	struct mutex io_lock;				/* Lock during read/write calls */
+	struct mutex io_lock;					/* Lock during read/write calls */
 	wait_queue_head_t header_wait;			/* Wait until there is a new header available */
 	wait_queue_head_t rx_wait;				/* Wait until there is data to be read */
 	wait_queue_head_t tx_wait;				/* Wait until we can write. */
+	wait_queue_head_t connection_wait;		/* Wait until we connect to a host. */
 	bool rx_complete;
 	bool tx_pending;
 
@@ -155,9 +161,7 @@ struct tmc_device {
 
 struct f_tmc_opts {
 	struct usb_function_instance func_inst;
-	unsigned int interface;
 	struct mutex io_lock;
-	struct tmc_device *tmc;
 
 	/* TMC Capabilities */
 	/* Section 4.2.1.8 of USB TMC Specification Revision 1.0*/
