@@ -178,7 +178,7 @@ static int tmc_gadget_ioctl_write_rl_state(struct tmc_device *tmc, void __user *
 		if (err)
 			return -EFAULT;
 
-		tmc->remote_local_state = (gadget_tmc488_localremote_state) rlstate_copy;
+		tmc->remote_local_state = (enum gadget_tmc488_localremote_state) rlstate_copy;
 
 		return 0;
 	}
@@ -656,7 +656,7 @@ static ssize_t tmc_gadget_fops_write(struct file *file, const char __user *buf, 
 		if (header_required) {
 			dev_dbg(&tmc->dev, "%s: line %u\n", __func__, __LINE__); // @suppress("Symbol is not resolved")
 
-			gadget_tmc_header response_header;
+			struct gadget_tmc_header response_header;
 
 			memset(&response_header, 0, sizeof(response_header));
 

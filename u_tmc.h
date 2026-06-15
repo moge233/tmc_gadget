@@ -99,7 +99,7 @@ struct tmc_device {
 	bool is_shutdown;
 	bool is_suspended;
 	bool connection_reset;
-	gadget_tmc488_localremote_state remote_local_state;
+	enum gadget_tmc488_localremote_state remote_local_state;
 	__u8 term_char;
 	__u32 status_byte;
 	__u32 ren;
@@ -112,7 +112,7 @@ struct tmc_device {
 	/*
 	 * Message status members
 	 */
-	gadget_tmc_header current_header;
+	struct gadget_tmc_header current_header;
 	bool new_header_required;
 	bool new_header_available;
 
