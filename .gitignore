@@ -1,7 +1,8 @@
-./kobj/*
-./mod/*
-./obj/*
-./order/*
-./symvers/*
+kobj/*
+mod/*
+obj/*
+order/*
+symvers/*
 
-./*.cmd
+*.cmd
+*.o
