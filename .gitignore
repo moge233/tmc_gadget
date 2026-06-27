@@ -1,0 +1,7 @@
+./kobj/*
+./mod/*
+./obj/*
+./order/*
+./symvers/*
+
+./*.cmd
